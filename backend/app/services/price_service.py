@@ -94,49 +94,73 @@ def fetch_and_store_prices():
 def get_cached_prices(commodity=None, state=None, limit=100):
     """
     Retrieve stored prices from Supabase, optionally filtered.
+    Falls back to raw SQL if ORM query fails (column mismatch).
     """
     db = SessionLocal()
 
     try:
-        query = db.query(Price)
+        # Try ORM query first
+        try:
+            query = db.query(Price)
+            if commodity:
+                query = query.filter(func.lower(Price.commodity) == commodity.lower())
+            if state:
+                query = query.filter(func.lower(Price.state) == state.lower())
+            prices = query.order_by(Price.created_at.desc()).limit(min(limit, 500)).all()
 
-        if commodity:
-            query = query.filter(
-                func.lower(Price.commodity) == commodity.lower()
-            )
-        if state:
-            query = query.filter(
-                func.lower(Price.state) == state.lower()
-            )
+            return [_serialize_price(p) for p in prices]
 
-        prices = (
-            query
-            .order_by(Price.created_at.desc())
-            .limit(min(limit, 500))
-            .all()
-        )
+        except Exception as orm_err:
+            print(f"⚠ ORM query failed: {orm_err}, falling back to raw SQL")
+            db.rollback()
 
-        return [
-            {
-                "commodity": p.commodity,
-                "state": getattr(p, 'state', None),
-                "district": getattr(p, 'district', None),
-                "market": getattr(p, 'market', None),
-                "variety": getattr(p, 'variety', None),
-                "grade": getattr(p, 'grade', None),
-                "min_price": getattr(p, 'min_price', None),
-                "max_price": getattr(p, 'max_price', None),
-                "modal_price": getattr(p, 'modal_price', None) or p.price,
-                "price": p.price,
-                "unit": p.unit,
-                "arrival_date": getattr(p, 'arrival_date', None).strftime("%Y-%m-%d") if getattr(p, 'arrival_date', None) else None,
-                "date": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
-            }
-            for p in prices
-        ]
+            # Fallback: raw SQL with only guaranteed columns
+            from sqlalchemy import text
+            sql = "SELECT id, commodity, price, unit, source, created_at FROM prices ORDER BY created_at DESC LIMIT :lim"
+            result = db.execute(text(sql), {"lim": min(limit, 500)})
+            rows = result.fetchall()
+
+            return [
+                {
+                    "commodity": r[1],
+                    "state": None, "district": None, "market": None,
+                    "variety": None, "grade": None,
+                    "min_price": None, "max_price": None,
+                    "modal_price": r[2], "price": r[2],
+                    "unit": r[3],
+                    "arrival_date": None,
+                    "date": r[5].strftime("%Y-%m-%d %H:%M") if r[5] else None,
+                }
+                for r in rows
+            ]
 
     finally:
         db.close()
+
+
+def _serialize_price(p):
+    """Safely serialize a Price ORM object to dict."""
+    try:
+        arrival = getattr(p, 'arrival_date', None)
+        arrival_str = arrival.strftime("%Y-%m-%d") if arrival else None
+    except Exception:
+        arrival_str = None
+
+    return {
+        "commodity": p.commodity,
+        "state": getattr(p, 'state', None),
+        "district": getattr(p, 'district', None),
+        "market": getattr(p, 'market', None),
+        "variety": getattr(p, 'variety', None),
+        "grade": getattr(p, 'grade', None),
+        "min_price": getattr(p, 'min_price', None),
+        "max_price": getattr(p, 'max_price', None),
+        "modal_price": getattr(p, 'modal_price', None) or p.price,
+        "price": p.price,
+        "unit": p.unit,
+        "arrival_date": arrival_str,
+        "date": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
+    }
 
 
 def get_distinct_commodities():
@@ -162,27 +186,36 @@ def get_distinct_states():
 def get_price_stats(commodity=None, state=None):
     """
     Get aggregated price statistics for a commodity/state.
-    Used by the frontend for summary cards.
+    Uses Price.price as fallback if new columns don't exist yet.
     """
     db = SessionLocal()
     try:
-        query = db.query(
-            func.min(Price.min_price).label("overall_min"),
-            func.max(Price.max_price).label("overall_max"),
-            func.avg(Price.modal_price).label("avg_modal"),
-            func.count(Price.id).label("total_records"),
-        )
-
-        if commodity:
-            query = query.filter(
-                func.lower(Price.commodity) == commodity.lower()
+        try:
+            query = db.query(
+                func.min(Price.min_price).label("overall_min"),
+                func.max(Price.max_price).label("overall_max"),
+                func.avg(Price.modal_price).label("avg_modal"),
+                func.count(Price.id).label("total_records"),
             )
-        if state:
-            query = query.filter(
-                func.lower(Price.state) == state.lower()
+            if commodity:
+                query = query.filter(func.lower(Price.commodity) == commodity.lower())
+            if state:
+                query = query.filter(func.lower(Price.state) == state.lower())
+            row = query.first()
+        except Exception:
+            db.rollback()
+            # Fallback: use legacy 'price' column
+            query = db.query(
+                func.min(Price.price).label("overall_min"),
+                func.max(Price.price).label("overall_max"),
+                func.avg(Price.price).label("avg_modal"),
+                func.count(Price.id).label("total_records"),
             )
-
-        row = query.first()
+            if commodity:
+                query = query.filter(func.lower(Price.commodity) == commodity.lower())
+            if state:
+                query = query.filter(func.lower(Price.state) == state.lower())
+            row = query.first()
 
         return {
             "min_price": round(row.overall_min, 2) if row.overall_min else 0,
