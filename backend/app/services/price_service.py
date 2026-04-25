@@ -119,17 +119,17 @@ def get_cached_prices(commodity=None, state=None, limit=100):
         return [
             {
                 "commodity": p.commodity,
-                "state": p.state,
-                "district": p.district,
-                "market": p.market,
-                "variety": p.variety,
-                "grade": p.grade,
-                "min_price": p.min_price,
-                "max_price": p.max_price,
-                "modal_price": p.modal_price,
+                "state": getattr(p, 'state', None),
+                "district": getattr(p, 'district', None),
+                "market": getattr(p, 'market', None),
+                "variety": getattr(p, 'variety', None),
+                "grade": getattr(p, 'grade', None),
+                "min_price": getattr(p, 'min_price', None),
+                "max_price": getattr(p, 'max_price', None),
+                "modal_price": getattr(p, 'modal_price', None) or p.price,
                 "price": p.price,
                 "unit": p.unit,
-                "arrival_date": p.arrival_date.strftime("%Y-%m-%d") if p.arrival_date else None,
+                "arrival_date": getattr(p, 'arrival_date', None).strftime("%Y-%m-%d") if getattr(p, 'arrival_date', None) else None,
                 "date": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
             }
             for p in prices

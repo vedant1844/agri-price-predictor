@@ -38,12 +38,40 @@ def scheduled_fetch():
         print(f"❌ [Scheduler] Error: {e}")
 
 
+def migrate_database():
+    """Add new columns to existing tables if they don't exist."""
+    from sqlalchemy import text
+    new_columns = [
+        ("state", "VARCHAR(100)"),
+        ("district", "VARCHAR(100)"),
+        ("market", "VARCHAR(200)"),
+        ("variety", "VARCHAR(100)"),
+        ("grade", "VARCHAR(50)"),
+        ("min_price", "FLOAT"),
+        ("max_price", "FLOAT"),
+        ("modal_price", "FLOAT"),
+        ("arrival_date", "DATE"),
+    ]
+    with engine.connect() as conn:
+        for col_name, col_type in new_columns:
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE prices ADD COLUMN IF NOT EXISTS {col_name} {col_type}"
+                ))
+            except Exception as e:
+                print(f"⚠ Column {col_name} migration: {e}")
+        conn.commit()
+    print("✅ Database migration completed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events for the FastAPI app."""
     # ── Startup ──
-    # Create database tables
+    # Create database tables (new tables only)
     Base.metadata.create_all(bind=engine)
+    # Add new columns to existing tables
+    migrate_database()
     print("✅ Database tables created/verified")
 
     # Start the background scheduler
