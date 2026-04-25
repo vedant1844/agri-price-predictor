@@ -1,5 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
 numpy
 scikit-learn
@@ -10,3 +10,4 @@ requests
 python-dotenv
 sqlalchemy
 psycopg2-binary
+joblib

@@ -2,9 +2,11 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
 import LoadingOverlay from '../components/LoadingOverlay';
+import { fetchPrediction } from '../api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
+// Fallback defaults (used ONLY if backend is unreachable)
 const CROP_BASE = { wheat: 2400, rice: 2800, cotton: 6500, sugarcane: 350, maize: 2000, soybean: 4500, tomato: 1800, onion: 2200, potato: 1600, apple: 7200, banana: 2000, groundnut: 5500 };
 const STATE_MULT = { karnataka: 1.05, maharashtra: 1.08, gujarat: 1.10, punjab: 1.12, haryana: 1.09, up: 0.98, mp: 0.97, rajasthan: 1.02, ap: 1.04, telangana: 1.06, 'tamil-nadu': 1.07, wb: 1.01 };
 
@@ -17,23 +19,63 @@ export default function PredictPrice() {
   const [form, setForm] = useState({ crop: 'wheat', state: 'karnataka', month: '4', curYear: '2026', futYear: '2028' });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
   const resultRef = useRef(null);
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
-  const predict = () => {
+  const predict = async () => {
     const curY = parseInt(form.curYear), futY = parseInt(form.futYear);
     if (futY <= curY) { alert('Future year must be greater than current year.'); return; }
+
     setLoading(true);
-    setTimeout(() => {
+    setError(null);
+
+    try {
+      // ✅ Call the real backend API
+      const data = await fetchPrediction({
+        commodity: form.crop,
+        state: form.state,
+        month: parseInt(form.month),
+        currentYear: curY,
+        futureYear: futY,
+      });
+
+      const years = futY - curY;
+      setResult({
+        curPrice: data.current_price,
+        futPrice: data.future_price,
+        conf: data.confidence,
+        range: data.price_range,
+        pct: data.pct_change,
+        days: data.days,
+        min: data.min_price,
+        max: data.max_price,
+        labels: data.chart?.labels || [],
+        prices: data.chart?.prices || [],
+        pMin: data.chart?.p_min || [],
+        pMax: data.chart?.p_max || [],
+        years: years,
+        crop: form.crop,
+        state: form.state,
+        modelType: data.model_type,
+        growthRate: data.growth_rate,
+        advice: data.advice,
+      });
+
+    } catch (err) {
+      console.warn('Backend API unavailable, using local fallback:', err.message);
+      setError('Server is waking up... Using offline estimation. Try again in 30 seconds for AI prediction.');
+
+      // ⚠ Offline fallback — local calculation (same as original)
       const base = CROP_BASE[form.crop] || 2500;
       const mult = STATE_MULT[form.state] || 1.0;
       const years = futY - curY;
       const growth = 0.04 + Math.random() * 0.06;
       const curPrice = Math.round(base * mult);
       const futPrice = Math.round(curPrice * Math.pow(1 + growth, years));
-      const conf = Math.floor(85 + Math.random() * 9);
-      const range = Math.round(futPrice * 0.09);
+      const conf = Math.floor(75 + Math.random() * 5);
+      const range = Math.round(futPrice * 0.12);
       const pct = (((futPrice - curPrice) / curPrice) * 100).toFixed(1);
       const labels = [], prices = [], pMin = [], pMax = [];
       for (let y = curY; y <= futY; y++) {
@@ -41,9 +83,10 @@ export default function PredictPrice() {
         const p = Math.round(curPrice * Math.pow(1 + growth, y - curY));
         prices.push(p); pMin.push(Math.round(p * 0.91)); pMax.push(Math.round(p * 1.09));
       }
+      setResult({ curPrice, futPrice, conf, range, pct, days: years * 365, min: futPrice - range, max: futPrice + range, labels, prices, pMin, pMax, years, crop: form.crop, state: form.state, modelType: 'offline_fallback', growthRate: (growth * 100).toFixed(1), advice: null });
+    } finally {
       setLoading(false);
-      setResult({ curPrice, futPrice, conf, range, pct, days: years * 365, min: futPrice - range, max: futPrice + range, labels, prices, pMin, pMax, years, crop: form.crop, state: form.state });
-    }, 1800);
+    }
   };
 
   useEffect(() => {
@@ -83,8 +126,15 @@ export default function PredictPrice() {
 
           <PredictButton onClick={predict} />
 
+          {error && (
+            <div style={{ marginTop: '1rem', background: '#fff3e0', border: '1px solid #ffcc80', borderRadius: 10, padding: '10px 14px', fontSize: '0.84rem', color: '#e65100' }}>
+              ⚡ {error}
+            </div>
+          )}
+
           {result && (
             <div ref={resultRef} style={{ marginTop: '2rem', animation: 'fadeUp 0.4s ease' }}>
+              <ModelBadge modelType={result.modelType} />
               <Disclaimer />
               <PriceCard result={result} />
               <RangeCard result={result} />
@@ -95,6 +145,20 @@ export default function PredictPrice() {
         </div>
       </div>
     </>
+  );
+}
+
+function ModelBadge({ modelType }) {
+  const labels = {
+    hybrid_arima_xgboost: { text: '🤖 Hybrid ARIMA + XGBoost Model', bg: '#e8f5e9', color: '#2e7d32' },
+    statistical_fallback: { text: '📊 Statistical Estimation (Model training needed)', bg: '#fff8e1', color: '#f57f17' },
+    offline_fallback: { text: '⚡ Offline Mode (Server waking up)', bg: '#fff3e0', color: '#e65100' },
+  };
+  const info = labels[modelType] || labels.offline_fallback;
+  return (
+    <div style={{ background: info.bg, borderRadius: 8, padding: '8px 14px', fontSize: '0.82rem', fontWeight: 600, color: info.color, textAlign: 'center', marginBottom: '1rem' }}>
+      {info.text}
+    </div>
   );
 }
 
@@ -144,10 +208,10 @@ function PriceCard({ result }) {
         ↑ +{pct}%
       </div>
       <div style={{ fontSize: '0.85rem', opacity: 0.8, marginBottom: 4 }}>Predicted Future Price</div>
-      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: '3rem', fontWeight: 700, lineHeight: 1 }}>₹{futPrice.toLocaleString('en-IN')}</div>
+      <div style={{ fontFamily: "'Playfair Display', serif", fontSize: '3rem', fontWeight: 700, lineHeight: 1 }}>₹{Math.round(futPrice).toLocaleString('en-IN')}</div>
       <div style={{ fontSize: '0.9rem', opacity: 0.75, marginBottom: '1rem' }}>/quintal</div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', borderTop: '1px solid rgba(255,255,255,0.2)', paddingTop: '1rem' }}>
-        {[{ v: conf + '%', l: 'Confidence' }, { v: days, l: 'Days' }, { v: '±₹' + range.toLocaleString('en-IN'), l: 'Range' }].map((m, i) => (
+        {[{ v: Math.round(conf) + '%', l: 'Confidence' }, { v: days, l: 'Days' }, { v: '±₹' + Math.round(range).toLocaleString('en-IN'), l: 'Range' }].map((m, i) => (
           <div key={i} style={{ textAlign: 'center' }}>
             <div style={{ fontSize: '1rem', fontWeight: 600 }}>{m.v}</div>
             <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: 2 }}>{m.l}</div>
@@ -165,13 +229,13 @@ function RangeCard({ result }) {
     <div style={{ background: '#e8f5e9', borderRadius: 12, padding: '1.4rem', marginBottom: '1.2rem' }}>
       <h4 style={{ fontSize: '0.95rem', color: '#2d6235', fontWeight: 600, marginBottom: '1rem' }}>📊 Expected Price Range</h4>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#c62828', minWidth: 80 }}>₹{min.toLocaleString('en-IN')}</span>
+        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#c62828', minWidth: 80 }}>₹{Math.round(min).toLocaleString('en-IN')}</span>
         <div style={{ flex: 1, height: 8, background: 'linear-gradient(to right, #ef9a9a, #a5d6a7, #66bb6a)', borderRadius: 4, position: 'relative' }}>
           <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: 14, height: 14, background: '#2d6235', borderRadius: '50%', border: '2px solid white', boxShadow: '0 1px 4px rgba(0,0,0,0.2)' }} />
         </div>
-        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#2e7d32', minWidth: 80, textAlign: 'right' }}>₹{max.toLocaleString('en-IN')}</span>
+        <span style={{ fontSize: '0.92rem', fontWeight: 600, color: '#2e7d32', minWidth: 80, textAlign: 'right' }}>₹{Math.round(max).toLocaleString('en-IN')}</span>
       </div>
-      <div style={{ fontSize: '0.82rem', color: '#4a6b4a' }}>Range Span: ₹{(range * 2).toLocaleString('en-IN')} ({variation}% variation)</div>
+      <div style={{ fontSize: '0.82rem', color: '#4a6b4a' }}>Range Span: ₹{Math.round(range * 2).toLocaleString('en-IN')} ({variation}% variation)</div>
     </div>
   );
 }
@@ -196,14 +260,17 @@ function ChartCard({ result }) {
 }
 
 function AdviceCard({ result }) {
-  const { conf, crop, years } = result;
+  const { conf, crop, years, advice: apiAdvice } = result;
   const cropName = crop.charAt(0).toUpperCase() + crop.slice(1);
-  const advice = [
+
+  // Use advice from API if available, otherwise generate locally
+  const advice = apiAdvice || [
     { icon: '🎯', title: 'Market Timing Advice', text: `Consider holding ${cropName} for ${Math.round(years * 0.4 * 12)} more months for potentially better prices at your target mandi.` },
     { icon: '🌤', title: 'Seasonal Outlook', text: 'Monitor weather forecasts closely. Price volatility typically increases near harvest season in your region.' },
     { icon: '⚠', title: 'Risk Warning', text: `${conf > 90 ? 'Low risk' : 'Moderate risk'} — ${conf > 90 ? 'market conditions are relatively stable for this crop' : 'general market shifts are possible, monitor trends'}.` },
-    { icon: '✅', title: "Today's Action Plan", text: `Prediction confidence is ${conf}%. Compare prices at 2–3 nearby mandis before selling. Factor in transportation costs for the best net return.` },
+    { icon: '✅', title: "Today's Action Plan", text: `Prediction confidence is ${Math.round(conf)}%. Compare prices at 2–3 nearby mandis before selling. Factor in transportation costs for the best net return.` },
   ];
+
   return (
     <div style={{ background: 'white', borderRadius: 12, padding: '1.4rem', border: '1px solid rgba(58,125,68,0.12)' }}>
       <h4 style={{ fontSize: '0.95rem', fontWeight: 600, color: '#1a2e1a', marginBottom: '1rem' }}>💡 Farmer Advice</h4>
