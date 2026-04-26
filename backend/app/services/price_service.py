@@ -93,13 +93,13 @@ def fetch_and_store_prices():
 
 def get_cached_prices(commodity=None, state=None, limit=100):
     """
-    Retrieve stored prices from Supabase using raw SQL for reliability.
+    Retrieve stored prices from Supabase using raw SQL.
     """
     from sqlalchemy import text
     db = SessionLocal()
 
     try:
-        # Build raw SQL — avoids ORM column mismatch issues
+        # Simple raw SQL — SELECT * avoids any column mismatch
         conditions = []
         params = {"lim": min(limit, 500)}
 
@@ -111,35 +111,7 @@ def get_cached_prices(commodity=None, state=None, limit=100):
             params["state"] = state
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-        # Check which columns exist
-        try:
-            col_check = db.execute(text(
-                "SELECT column_name FROM information_schema.columns WHERE table_name = 'prices'"
-            ))
-            existing_cols = {r[0] for r in col_check.fetchall()}
-        except Exception:
-            existing_cols = {"id", "commodity", "price", "unit", "source", "created_at"}
-
-        # Build SELECT with available columns
-        base_cols = "id, commodity, price, unit, created_at"
-        extra_cols = {
-            "state": "state", "district": "district", "market": "market",
-            "variety": "variety", "grade": "grade",
-            "min_price": "min_price", "max_price": "max_price",
-            "modal_price": "modal_price", "arrival_date": "arrival_date",
-            "source": "source",
-        }
-
-        select_parts = [base_cols]
-        available_extras = []
-        for col_name in extra_cols:
-            if col_name in existing_cols:
-                select_parts.append(col_name)
-                available_extras.append(col_name)
-
-        select_clause = ", ".join(select_parts)
-        sql = f"SELECT {select_clause} FROM prices {where} ORDER BY created_at DESC LIMIT :lim"
+        sql = f"SELECT * FROM prices {where} ORDER BY created_at DESC LIMIT :lim"
 
         result = db.execute(text(sql), params)
         rows = result.fetchall()
@@ -180,7 +152,6 @@ def get_cached_prices(commodity=None, state=None, limit=100):
         return output
 
     except Exception as e:
-        print(f"❌ get_cached_prices error: {e}")
         import traceback
         traceback.print_exc()
         return []
