@@ -53,7 +53,12 @@ def prices(
     limit: int = Query(100, ge=1, le=500, description="Number of records"),
 ):
     """Get historical prices from Supabase, optionally filtered."""
-    return get_cached_prices(commodity=commodity, state=state, limit=limit)
+    try:
+        return get_cached_prices(commodity=commodity, state=state, limit=limit)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": str(e), "prices": []}
 
 
 @router.get("/price-stats")

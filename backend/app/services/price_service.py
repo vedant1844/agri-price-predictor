@@ -93,74 +93,100 @@ def fetch_and_store_prices():
 
 def get_cached_prices(commodity=None, state=None, limit=100):
     """
-    Retrieve stored prices from Supabase, optionally filtered.
-    Falls back to raw SQL if ORM query fails (column mismatch).
+    Retrieve stored prices from Supabase using raw SQL for reliability.
     """
+    from sqlalchemy import text
     db = SessionLocal()
 
     try:
-        # Try ORM query first
+        # Build raw SQL — avoids ORM column mismatch issues
+        conditions = []
+        params = {"lim": min(limit, 500)}
+
+        if commodity:
+            conditions.append("LOWER(commodity) = LOWER(:commodity)")
+            params["commodity"] = commodity
+        if state:
+            conditions.append("LOWER(state) = LOWER(:state)")
+            params["state"] = state
+
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+        # Check which columns exist
         try:
-            query = db.query(Price)
-            if commodity:
-                query = query.filter(func.lower(Price.commodity) == commodity.lower())
-            if state:
-                query = query.filter(func.lower(Price.state) == state.lower())
-            prices = query.order_by(Price.created_at.desc()).limit(min(limit, 500)).all()
+            col_check = db.execute(text(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = 'prices'"
+            ))
+            existing_cols = {r[0] for r in col_check.fetchall()}
+        except Exception:
+            existing_cols = {"id", "commodity", "price", "unit", "source", "created_at"}
 
-            return [_serialize_price(p) for p in prices]
+        # Build SELECT with available columns
+        base_cols = "id, commodity, price, unit, created_at"
+        extra_cols = {
+            "state": "state", "district": "district", "market": "market",
+            "variety": "variety", "grade": "grade",
+            "min_price": "min_price", "max_price": "max_price",
+            "modal_price": "modal_price", "arrival_date": "arrival_date",
+            "source": "source",
+        }
 
-        except Exception as orm_err:
-            print(f"⚠ ORM query failed: {orm_err}, falling back to raw SQL")
-            db.rollback()
+        select_parts = [base_cols]
+        available_extras = []
+        for col_name in extra_cols:
+            if col_name in existing_cols:
+                select_parts.append(col_name)
+                available_extras.append(col_name)
 
-            # Fallback: raw SQL with only guaranteed columns
-            from sqlalchemy import text
-            sql = "SELECT id, commodity, price, unit, source, created_at FROM prices ORDER BY created_at DESC LIMIT :lim"
-            result = db.execute(text(sql), {"lim": min(limit, 500)})
-            rows = result.fetchall()
+        select_clause = ", ".join(select_parts)
+        sql = f"SELECT {select_clause} FROM prices {where} ORDER BY created_at DESC LIMIT :lim"
 
-            return [
-                {
-                    "commodity": r[1],
-                    "state": None, "district": None, "market": None,
-                    "variety": None, "grade": None,
-                    "min_price": None, "max_price": None,
-                    "modal_price": r[2], "price": r[2],
-                    "unit": r[3],
-                    "arrival_date": None,
-                    "date": r[5].strftime("%Y-%m-%d %H:%M") if r[5] else None,
-                }
-                for r in rows
-            ]
+        result = db.execute(text(sql), params)
+        rows = result.fetchall()
+        col_names = list(result.keys())
+
+        output = []
+        for r in rows:
+            row_dict = dict(zip(col_names, r))
+            modal = row_dict.get("modal_price") or row_dict.get("price", 0)
+            arrival = row_dict.get("arrival_date")
+
+            try:
+                arrival_str = arrival.strftime("%Y-%m-%d") if arrival else None
+            except Exception:
+                arrival_str = str(arrival) if arrival else None
+
+            try:
+                date_str = row_dict["created_at"].strftime("%Y-%m-%d %H:%M") if row_dict.get("created_at") else None
+            except Exception:
+                date_str = None
+
+            output.append({
+                "commodity": row_dict.get("commodity", "Unknown"),
+                "state": row_dict.get("state"),
+                "district": row_dict.get("district"),
+                "market": row_dict.get("market"),
+                "variety": row_dict.get("variety"),
+                "grade": row_dict.get("grade"),
+                "min_price": row_dict.get("min_price"),
+                "max_price": row_dict.get("max_price"),
+                "modal_price": modal,
+                "price": row_dict.get("price", 0),
+                "unit": row_dict.get("unit", "quintal"),
+                "arrival_date": arrival_str,
+                "date": date_str,
+            })
+
+        return output
+
+    except Exception as e:
+        print(f"❌ get_cached_prices error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
 
     finally:
         db.close()
-
-
-def _serialize_price(p):
-    """Safely serialize a Price ORM object to dict."""
-    try:
-        arrival = getattr(p, 'arrival_date', None)
-        arrival_str = arrival.strftime("%Y-%m-%d") if arrival else None
-    except Exception:
-        arrival_str = None
-
-    return {
-        "commodity": p.commodity,
-        "state": getattr(p, 'state', None),
-        "district": getattr(p, 'district', None),
-        "market": getattr(p, 'market', None),
-        "variety": getattr(p, 'variety', None),
-        "grade": getattr(p, 'grade', None),
-        "min_price": getattr(p, 'min_price', None),
-        "max_price": getattr(p, 'max_price', None),
-        "modal_price": getattr(p, 'modal_price', None) or p.price,
-        "price": p.price,
-        "unit": p.unit,
-        "arrival_date": arrival_str,
-        "date": p.created_at.strftime("%Y-%m-%d %H:%M") if p.created_at else None,
-    }
 
 
 def get_distinct_commodities():
