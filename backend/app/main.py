@@ -78,7 +78,7 @@ async def lifespan(app: FastAPI):
     # Fetch data every 30 minutes to keep Supabase populated
     scheduler.add_job(scheduled_fetch, 'interval', minutes=30, id='fetch_prices')
 
-    # Also run once at startup
+    # Also run once at startup to populate data immediately
     scheduler.add_job(scheduled_fetch, 'date', id='fetch_prices_startup')
 
     scheduler.start()
