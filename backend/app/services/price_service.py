@@ -28,8 +28,22 @@ def fetch_and_store_prices():
             separator = "&" if "?" in fetch_url else "?"
             fetch_url += f"{separator}limit=500"
 
-        response = requests.get(fetch_url, timeout=30)
-        response.raise_for_status()
+        # Retry up to 3 times with increasing timeout (govt API can be slow)
+        response = None
+        for attempt in range(1, 4):
+            try:
+                timeout = 30 * attempt  # 30s, 60s, 90s
+                print(f"⏳ Attempt {attempt}/3 (timeout={timeout}s)...")
+                response = requests.get(fetch_url, timeout=timeout)
+                response.raise_for_status()
+                break
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                print(f"⚠ Attempt {attempt} failed: {e}")
+                if attempt == 3:
+                    raise
+                import time
+                time.sleep(5)  # Wait 5s before retry
+
         data = response.json()
 
         records = data.get("records", [])
