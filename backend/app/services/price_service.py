@@ -22,22 +22,26 @@ def fetch_and_store_prices():
     stored_count = 0
 
     try:
-        # Fetch with higher limit
+        # Fetch with reasonable limit (API struggles with large requests)
         fetch_url = url
         if "limit=" not in fetch_url:
             separator = "&" if "?" in fetch_url else "?"
-            fetch_url += f"{separator}limit=500"
+            fetch_url += f"{separator}limit=100"
 
         # Retry up to 3 times with increasing timeout (govt API can be slow)
         response = None
+        limits = [100, 50, 20]  # Reduce limit on each retry
         for attempt in range(1, 4):
             try:
-                timeout = 30 * attempt  # 30s, 60s, 90s
-                print(f"⏳ Attempt {attempt}/3 (timeout={timeout}s)...")
-                response = requests.get(fetch_url, timeout=timeout)
+                # Adjust limit for this attempt
+                attempt_url = fetch_url.replace("limit=100", f"limit={limits[attempt-1]}")
+                timeout = 60 * attempt  # 60s, 120s, 180s
+                print(f"⏳ Attempt {attempt}/3 (limit={limits[attempt-1]}, timeout={timeout}s)...")
+                response = requests.get(attempt_url, timeout=timeout)
                 response.raise_for_status()
                 break
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
+                    requests.exceptions.HTTPError) as e:
                 print(f"⚠ Attempt {attempt} failed: {e}")
                 if attempt == 3:
                     raise
