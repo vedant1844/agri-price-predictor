@@ -51,6 +51,8 @@ def migrate_database():
         ("max_price", "FLOAT"),
         ("modal_price", "FLOAT"),
         ("arrival_date", "DATE"),
+        ("unit", "VARCHAR(50)"),
+        ("source", "VARCHAR(100)"),
     ]
     with engine.connect() as conn:
         for col_name, col_type in new_columns:

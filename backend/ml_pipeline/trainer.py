@@ -42,9 +42,12 @@ def get_training_data():
 
     db = SessionLocal()
     try:
+        from sqlalchemy import or_
+
+        # Accept records with modal_price > 0 OR legacy price > 0
         prices = (
             db.query(Price)
-            .filter(Price.modal_price > 0)
+            .filter(or_(Price.modal_price > 0, Price.price > 0))
             .order_by(Price.created_at.asc())
             .all()
         )
@@ -104,7 +107,7 @@ def create_features(df):
     df["volatility_7"] = df["modal_price"].rolling(window=7, min_periods=1).std()
 
     # Fill NaN from lag/rolling with forward fill then backward fill
-    df = df.fillna(method="ffill").fillna(method="bfill")
+    df = df.ffill().bfill()
 
     return df
 
@@ -203,7 +206,40 @@ def train_model():
     X = df_clean[feature_cols].values
     y_residuals = df_clean["residuals"].values
 
-    # --- Step 6: Train XGBoost on residuals ---
+    # --- Step 5b: Evaluate standalone ARIMA ---
+    print("📊 Evaluating standalone ARIMA...")
+    arima_preds_clean = df_clean["arima_pred"].values
+    actuals = df_clean["modal_price"].values
+
+    arima_mae = np.mean(np.abs(actuals - arima_preds_clean))
+    arima_rmse = np.sqrt(np.mean((actuals - arima_preds_clean) ** 2))
+    arima_mape = np.mean(np.abs((actuals - arima_preds_clean) / (actuals + 1e-8))) * 100
+
+    print(f"   ARIMA — MAE: {arima_mae:.2f}, RMSE: {arima_rmse:.2f}, MAPE: {arima_mape:.2f}%")
+
+    # --- Step 5c: Train and evaluate standalone XGBoost ---
+    print("📊 Training standalone XGBoost for comparison...")
+    xgb_standalone_cols = [c for c in feature_cols if c != "arima_pred"]
+    X_standalone = df_clean[xgb_standalone_cols].values
+
+    xgb_standalone = XGBRegressor(
+        n_estimators=100,
+        max_depth=5,
+        learning_rate=0.1,
+        subsample=0.8,
+        colsample_bytree=0.8,
+        random_state=42,
+    )
+    xgb_standalone.fit(X_standalone, actuals)
+    xgb_only_preds = xgb_standalone.predict(X_standalone)
+
+    xgb_mae = np.mean(np.abs(actuals - xgb_only_preds))
+    xgb_rmse = np.sqrt(np.mean((actuals - xgb_only_preds) ** 2))
+    xgb_mape = np.mean(np.abs((actuals - xgb_only_preds) / (actuals + 1e-8))) * 100
+
+    print(f"   XGBoost — MAE: {xgb_mae:.2f}, RMSE: {xgb_rmse:.2f}, MAPE: {xgb_mape:.2f}%")
+
+    # --- Step 6: Train XGBoost on residuals (hybrid component) ---
     print("🌲 Training XGBoost on ARIMA residuals...")
     xgb_model = XGBRegressor(
         n_estimators=100,
@@ -215,26 +251,47 @@ def train_model():
     )
     xgb_model.fit(X, y_residuals)
 
-    # --- Step 7: Evaluate ---
-    predictions = arima_predictions[len(arima_predictions) - len(df_clean):] + xgb_model.predict(X)
-    actuals = df_clean["modal_price"].values
+    # --- Step 7: Evaluate Hybrid Model ---
+    hybrid_predictions = arima_preds_clean + xgb_model.predict(X)
 
-    rmse = np.sqrt(np.mean((actuals - predictions) ** 2))
-    mae = np.mean(np.abs(actuals - predictions))
-    mape = np.mean(np.abs((actuals - predictions) / (actuals + 1e-8))) * 100
+    hybrid_mae = np.mean(np.abs(actuals - hybrid_predictions))
+    hybrid_rmse = np.sqrt(np.mean((actuals - hybrid_predictions) ** 2))
+    hybrid_mape = np.mean(np.abs((actuals - hybrid_predictions) / (actuals + 1e-8))) * 100
 
-    print(f"📊 Model Performance:")
-    print(f"   RMSE: {rmse:.2f}")
-    print(f"   MAE:  {mae:.2f}")
-    print(f"   MAPE: {mape:.2f}%")
+    print(f"\n📊 Model Performance Comparison (Table 2):")
+    print(f"   {'Model':<20} {'MAE':>8} {'RMSE':>8} {'MAPE (%)':>10}")
+    print(f"   {'─'*48}")
+    print(f"   {'ARIMA':<20} {arima_mae:>8.2f} {arima_rmse:>8.2f} {arima_mape:>10.2f}")
+    print(f"   {'XGBoost (standalone)':<20} {xgb_mae:>8.2f} {xgb_rmse:>8.2f} {xgb_mape:>10.2f}")
+    print(f"   {'Hybrid ML + ARIMA':<20} {hybrid_mae:>8.2f} {hybrid_rmse:>8.2f} {hybrid_mape:>10.2f}")
 
-    # --- Step 8: Save model and encoders ---
+    # --- Step 8: Build metrics dict (matches research paper Table 2) ---
+    metrics = {
+        "arima": {
+            "mae": round(arima_mae, 2),
+            "rmse": round(arima_rmse, 2),
+            "mape": round(arima_mape, 2),
+        },
+        "xgboost": {
+            "mae": round(xgb_mae, 2),
+            "rmse": round(xgb_rmse, 2),
+            "mape": round(xgb_mape, 2),
+        },
+        "hybrid": {
+            "mae": round(hybrid_mae, 2),
+            "rmse": round(hybrid_rmse, 2),
+            "mape": round(hybrid_mape, 2),
+        },
+    }
+
+    # --- Step 9: Save model and encoders ---
     model_data = {
         "xgb_model": xgb_model,
         "feature_cols": feature_cols,
-        "rmse": rmse,
-        "mae": mae,
-        "mape": mape,
+        "metrics": metrics,
+        "rmse": hybrid_rmse,
+        "mae": hybrid_mae,
+        "mape": hybrid_mape,
         "trained_at": datetime.utcnow().isoformat(),
         "training_samples": len(df_clean),
     }
@@ -245,8 +302,9 @@ def train_model():
 
     return {
         "status": "success",
-        "rmse": round(rmse, 2),
-        "mae": round(mae, 2),
-        "mape": round(mape, 2),
+        "metrics": metrics,
+        "rmse": round(hybrid_rmse, 2),
+        "mae": round(hybrid_mae, 2),
+        "mape": round(hybrid_mape, 2),
         "samples": len(df_clean),
     }

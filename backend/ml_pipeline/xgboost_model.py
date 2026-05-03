@@ -18,6 +18,21 @@ import numpy as np
 import joblib
 from datetime import datetime
 
+
+def _to_native(obj):
+    """Recursively convert numpy types to native Python types for JSON serialization."""
+    if isinstance(obj, dict):
+        return {k: _to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_to_native(v) for v in obj]
+    elif isinstance(obj, (np.integer,)):
+        return int(obj)
+    elif isinstance(obj, (np.floating,)):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    return obj
+
 MODEL_DIR = os.path.join(os.path.dirname(__file__))
 MODEL_PATH = os.path.join(MODEL_DIR, "model.pkl")
 ENCODERS_PATH = os.path.join(MODEL_DIR, "encoders.pkl")
@@ -92,10 +107,10 @@ def _predict_with_model(commodity, state, month, current_year, future_year):
     ]])
 
     # XGBoost predicts the residual correction
-    residual_correction = xgb_model.predict(features)[0]
+    residual_correction = float(xgb_model.predict(features)[0])
 
     # Current price = ARIMA baseline + XGBoost correction
-    current_price = base_price + residual_correction
+    current_price = float(base_price + residual_correction)
 
     # Project into the future using growth rate
     years = future_year - current_year
@@ -189,7 +204,7 @@ def _build_prediction_response(current_price, future_price, confidence,
     # Generate advice
     advice = _generate_advice(commodity, confidence, years, pct_change)
 
-    return {
+    return _to_native({
         "current_price": current_price,
         "future_price": future_price,
         "confidence": confidence,
@@ -213,7 +228,7 @@ def _build_prediction_response(current_price, future_price, confidence,
             "p_max": p_max,
         },
         "advice": advice,
-    }
+    })
 
 
 def _generate_advice(commodity, confidence, years, pct_change):
