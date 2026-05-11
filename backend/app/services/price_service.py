@@ -1,4 +1,5 @@
 import os
+import time
 import requests
 from datetime import datetime
 from sqlalchemy import func
@@ -6,104 +7,132 @@ from app.db import SessionLocal
 from app.models import Price
 
 
+def _fetch_page(base_url, limit, offset, timeout=30):
+    """Fetch a single page from the govt API with retry."""
+    separator = "&" if "?" in base_url else "?"
+    page_url = f"{base_url}{separator}limit={limit}&offset={offset}"
+
+    for attempt in range(1, 4):
+        try:
+            response = requests.get(page_url, timeout=timeout)
+            response.raise_for_status()
+            return response.json()
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            print(f"  Retry {attempt}/3 for offset={offset}: timeout/connection error")
+            time.sleep(3 * attempt)
+        except requests.exceptions.HTTPError as e:
+            print(f"  Retry {attempt}/3 for offset={offset}: HTTP {response.status_code}")
+            time.sleep(5 * attempt)
+
+    return None  # All retries failed for this page
+
+
+def _parse_record(item):
+    """Parse a single API record into a Price model instance."""
+    modal_price = float(item.get("modal_price", 0) or 0)
+    min_price = float(item.get("min_price", 0) or 0)
+    max_price = float(item.get("max_price", 0) or 0)
+
+    if modal_price <= 0:
+        return None
+
+    # Parse arrival date
+    arrival_date = None
+    date_str = item.get("arrival_date", "")
+    if date_str:
+        for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+            try:
+                arrival_date = datetime.strptime(date_str, fmt).date()
+                break
+            except ValueError:
+                continue
+
+    return Price(
+        commodity=item.get("commodity", "Unknown").strip(),
+        state=item.get("state", "").strip() or None,
+        district=item.get("district", "").strip() or None,
+        market=item.get("market", "").strip() or None,
+        variety=item.get("variety", "").strip() or None,
+        grade=item.get("grade", "").strip() or None,
+        min_price=min_price if min_price > 0 else None,
+        max_price=max_price if max_price > 0 else None,
+        modal_price=modal_price,
+        price=modal_price,  # legacy column
+        unit="quintal",
+        source="data.gov.in",
+        arrival_date=arrival_date,
+        created_at=datetime.utcnow(),
+    )
+
+
 def fetch_and_store_prices():
     """
     Fetch agricultural commodity prices from the Government of India
     data.gov.in API and store them in Supabase.
-    Fetches ALL available records with all fields as per the research paper.
-    """
-    url = os.getenv("AGRI_API_URL")
 
-    if not url:
-        print("❌ AGRI_API_URL not found in environment")
+    Uses small paginated requests (20 per page) to avoid timeouts.
+    Fetches up to 500 records across multiple pages.
+    Partial success: saves whatever pages succeed even if others fail.
+    """
+    base_url = os.getenv("AGRI_API_URL")
+
+    if not base_url:
+        print("AGRI_API_URL not found in environment")
         return None
+
+    PAGE_SIZE = 20       # Small pages = reliable responses
+    MAX_RECORDS = 500    # Total records to fetch
+    MAX_PAGES = MAX_RECORDS // PAGE_SIZE  # 25 pages
 
     db = SessionLocal()
     stored_count = 0
+    failed_pages = 0
 
     try:
-        # Fetch with reasonable limit (API struggles with large requests)
-        fetch_url = url
-        if "limit=" not in fetch_url:
-            separator = "&" if "?" in fetch_url else "?"
-            fetch_url += f"{separator}limit=100"
+        for page in range(MAX_PAGES):
+            offset = page * PAGE_SIZE
+            print(f"Fetching page {page + 1}/{MAX_PAGES} (offset={offset})...")
 
-        # Retry up to 3 times with increasing timeout (govt API can be slow)
-        response = None
-        limits = [100, 50, 20]  # Reduce limit on each retry
-        for attempt in range(1, 4):
-            try:
-                # Adjust limit for this attempt
-                attempt_url = fetch_url.replace("limit=100", f"limit={limits[attempt-1]}")
-                timeout = 60 * attempt  # 60s, 120s, 180s
-                print(f"⏳ Attempt {attempt}/3 (limit={limits[attempt-1]}, timeout={timeout}s)...")
-                response = requests.get(attempt_url, timeout=timeout)
-                response.raise_for_status()
+            data = _fetch_page(base_url, limit=PAGE_SIZE, offset=offset, timeout=30)
+
+            if data is None:
+                failed_pages += 1
+                print(f"  Page {page + 1} failed, skipping...")
+                if failed_pages >= 5:
+                    print("Too many failed pages, stopping early.")
+                    break
+                continue
+
+            records = data.get("records", [])
+            if not records:
+                print(f"  No more records at offset={offset}, done.")
                 break
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError,
-                    requests.exceptions.HTTPError) as e:
-                print(f"⚠ Attempt {attempt} failed: {e}")
-                if attempt == 3:
-                    raise
-                import time
-                time.sleep(5)  # Wait 5s before retry
 
-        data = response.json()
+            page_count = 0
+            for item in records:
+                try:
+                    price = _parse_record(item)
+                    if price:
+                        db.add(price)
+                        page_count += 1
+                except Exception as inner_error:
+                    print(f"  Skipping bad record: {inner_error}")
 
-        records = data.get("records", [])
-        print(f"📦 Received {len(records)} records from API")
+            # Commit after each page (partial saves)
+            db.commit()
+            stored_count += page_count
+            print(f"  Stored {page_count} records (total: {stored_count})")
 
-        for item in records:
-            try:
-                modal_price = float(item.get("modal_price", 0) or 0)
-                min_price = float(item.get("min_price", 0) or 0)
-                max_price = float(item.get("max_price", 0) or 0)
+            # Small delay between pages to be nice to the API
+            time.sleep(1)
 
-                if modal_price <= 0:
-                    continue
-
-                # Parse arrival date
-                arrival_date = None
-                date_str = item.get("arrival_date", "")
-                if date_str:
-                    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                        try:
-                            arrival_date = datetime.strptime(date_str, fmt).date()
-                            break
-                        except ValueError:
-                            continue
-
-                price = Price(
-                    commodity=item.get("commodity", "Unknown").strip(),
-                    state=item.get("state", "").strip() or None,
-                    district=item.get("district", "").strip() or None,
-                    market=item.get("market", "").strip() or None,
-                    variety=item.get("variety", "").strip() or None,
-                    grade=item.get("grade", "").strip() or None,
-                    min_price=min_price if min_price > 0 else None,
-                    max_price=max_price if max_price > 0 else None,
-                    modal_price=modal_price,
-                    price=modal_price,  # legacy column
-                    unit="quintal",
-                    source="data.gov.in",
-                    arrival_date=arrival_date,
-                    created_at=datetime.utcnow(),
-                )
-
-                db.add(price)
-                stored_count += 1
-
-            except Exception as inner_error:
-                print(f"⚠ Skipping bad record: {inner_error}")
-
-        db.commit()
-        print(f"✅ Stored {stored_count} price records in Supabase")
+        print(f"Finished: {stored_count} records stored, {failed_pages} pages failed")
         return stored_count
 
     except Exception as e:
         db.rollback()
-        print(f"❌ Error fetching data: {e}")
-        return None
+        print(f"Error in fetch_and_store_prices: {e}")
+        return stored_count if stored_count > 0 else None
 
     finally:
         db.close()
