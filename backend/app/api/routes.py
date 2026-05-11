@@ -36,6 +36,15 @@ def update_data(background_tasks: BackgroundTasks):
     return {"message": "Data update started in background", "status": "accepted"}
 
 
+@router.get("/update-data-sync")
+def update_data_sync():
+    """Synchronous version — waits and returns the result (for debugging)."""
+    count = fetch_and_store_prices()
+    if count is not None:
+        return {"message": f"Data updated: {count} records stored", "count": count}
+    return {"message": "Failed to update data", "error": True}
+
+
 @router.get("/fetch")
 def fetch(background_tasks: BackgroundTasks):
     """Alias for /update-data."""
