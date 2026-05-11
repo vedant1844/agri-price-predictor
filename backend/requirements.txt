@@ -5,7 +5,6 @@ numpy
 scikit-learn
 statsmodels
 xgboost
-apscheduler
 requests
 python-dotenv
 sqlalchemy

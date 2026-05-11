@@ -12,30 +12,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
-from apscheduler.schedulers.background import BackgroundScheduler
 
 from app.api.routes import router
 from app.db import engine, Base
 import app.models
-
-
-# ─── Scheduler for automatic data fetching ───────────────────────
-
-scheduler = BackgroundScheduler()
-
-
-def scheduled_fetch():
-    """Background job: fetch prices from govt API and store in Supabase."""
-    try:
-        from app.services.price_service import fetch_and_store_prices
-        print("⏳ [Scheduler] Fetching agri data...")
-        result = fetch_and_store_prices()
-        if result:
-            print(f"✅ [Scheduler] Stored {result} records")
-        else:
-            print("❌ [Scheduler] Failed to fetch data")
-    except Exception as e:
-        print(f"❌ [Scheduler] Error: {e}")
 
 
 def migrate_database():
@@ -70,27 +50,15 @@ def migrate_database():
 async def lifespan(app: FastAPI):
     """Startup and shutdown events for the FastAPI app."""
     # ── Startup ──
-    # Create database tables (new tables only)
     Base.metadata.create_all(bind=engine)
-    # Add new columns to existing tables
     migrate_database()
     print("✅ Database tables created/verified")
-
-    # Start the background scheduler
-    # Fetch data every 30 minutes to keep Supabase populated
-    scheduler.add_job(scheduled_fetch, 'interval', minutes=30, id='fetch_prices')
-
-    # Also run once at startup to populate data immediately
-    scheduler.add_job(scheduled_fetch, 'date', id='fetch_prices_startup')
-
-    scheduler.start()
-    print("🚀 Background scheduler started (every 30 min)")
+    print("ℹ️  Data fetching handled by external cron job (cron-job.org)")
 
     yield
 
     # ── Shutdown ──
-    scheduler.shutdown(wait=False)
-    print("🛑 Scheduler stopped")
+    print("🛑 Server shutting down")
 
 
 # ─── FastAPI App ─────────────────────────────────────────────────
