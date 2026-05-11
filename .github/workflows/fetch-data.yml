@@ -1,0 +1,30 @@
+name: Fetch Agri Price Data
+
+# Runs daily at 6:00 AM IST (00:30 UTC) and can also be triggered manually
+on:
+  schedule:
+    - cron: '30 0 * * *'   # Daily at 6:00 AM IST
+  workflow_dispatch:         # Manual trigger from GitHub UI
+
+jobs:
+  fetch-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests psycopg2-binary python-dotenv
+
+      - name: Fetch data from Govt API and store in Supabase
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          AGRI_API_URL: ${{ secrets.AGRI_API_URL }}
+        run: python scripts/fetch_to_db.py
