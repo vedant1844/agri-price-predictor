@@ -25,7 +25,10 @@ export default function Home({ navigate }) {
     <div>
       {/* Hero */}
       <section style={{
-        background: 'linear-gradient(165deg, #1a3a1a 0%, #2d6235 40%, #4a8c52 70%, #3a7d44 100%)',
+        backgroundImage: 'linear-gradient(rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.7)), url("/home-bg.png")',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundRepeat: 'no-repeat',
         minHeight: 'calc(100vh - 64px)',
         display: 'flex', flexDirection: 'column',
         alignItems: 'center', justifyContent: 'center',
