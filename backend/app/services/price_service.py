@@ -81,8 +81,8 @@ def fetch_and_store_prices():
         return None
 
     PAGE_SIZE = 20       # Small pages = reliable responses
-    MAX_RECORDS = 500    # Total records to fetch
-    MAX_PAGES = MAX_RECORDS // PAGE_SIZE  # 25 pages
+    MAX_RECORDS = 100    # Total records per cron run (5 pages)
+    MAX_PAGES = MAX_RECORDS // PAGE_SIZE  # 5 pages
 
     db = SessionLocal()
     stored_count = 0

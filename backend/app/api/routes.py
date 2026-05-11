@@ -1,6 +1,6 @@
 # app/api/routes.py
 
-from fastapi import APIRouter, Query, BackgroundTasks
+from fastapi import APIRouter, Query
 from typing import Optional
 from app.services.price_service import (
     fetch_and_store_prices,
@@ -30,15 +30,8 @@ def health():
 # ─── Data Fetching ───────────────────────────────────────────────
 
 @router.get("/update-data")
-def update_data(background_tasks: BackgroundTasks):
-    """Fetch latest prices from govt API and store in Supabase (runs in background)."""
-    background_tasks.add_task(fetch_and_store_prices)
-    return {"message": "Data update started in background", "status": "accepted"}
-
-
-@router.get("/update-data-sync")
-def update_data_sync():
-    """Synchronous version — waits and returns the result (for debugging)."""
+def update_data():
+    """Fetch latest prices from govt API and store in Supabase (synchronous)."""
     count = fetch_and_store_prices()
     if count is not None:
         return {"message": f"Data updated: {count} records stored", "count": count}
@@ -46,10 +39,9 @@ def update_data_sync():
 
 
 @router.get("/fetch")
-def fetch(background_tasks: BackgroundTasks):
+def fetch():
     """Alias for /update-data."""
-    return update_data(background_tasks)
-
+    return update_data()
 
 
 # ─── Price Data ──────────────────────────────────────────────────
