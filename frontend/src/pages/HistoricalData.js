@@ -84,24 +84,30 @@ export default function HistoricalData() {
         setLoading(false); return;
       }
 
-      // Extract all unique dates and sort descending
-      const allDates = [...new Set(pricesData.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
+      // Apply district filter first (if selected)
+      let districtFiltered = pricesData;
+      if (filters.district && filters.district !== 'All') {
+        districtFiltered = pricesData.filter(p => p.district === filters.district);
+      }
+
+      // Extract available dates from district-filtered data
+      const allDates = [...new Set(districtFiltered.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
       setAvailableDates(allDates);
 
-      // If first load (no date chosen yet), auto-select latest available date
+      if (districtFiltered.length === 0) {
+        setNoData(true); setRecords([]); setStats(statsData); setSrc('api');
+        setLoading(false); return;
+      }
+
+      // Auto-select latest available date on first load
       const dateToUse = overrideDate || filters.date;
       if (!overrideDate && filters.date === getToday() && allDates.length > 0 && !allDates.includes(getToday())) {
         setFilters(p => ({ ...p, date: allDates[0] }));
-        setLoading(false); return; // useEffect will re-trigger with new date
+        setLoading(false); return;
       }
 
       // Filter by date
-      let filtered = pricesData.filter(p => p.arrival_date === dateToUse);
-
-      // Filter by district
-      if (filters.district && filters.district !== 'All') {
-        filtered = filtered.filter(p => p.district === filters.district);
-      }
+      const filtered = districtFiltered.filter(p => p.arrival_date === dateToUse);
 
       if (filtered.length === 0) {
         setNoData(true); setRecords([]); setStats(statsData); setSrc('api');
