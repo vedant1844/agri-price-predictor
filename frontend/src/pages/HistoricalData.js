@@ -23,6 +23,7 @@ export default function HistoricalData() {
   const [loading, setLoading] = useState(false);
   const [src, setSrc] = useState('loading');
   const [noData, setNoData] = useState(false);
+  const [availableDates, setAvailableDates] = useState([]);
   const [stateOpts, setStateOpts] = useState([]);
   const [commodityOpts, setCommodityOpts] = useState([]);
   const [districtOpts, setDistrictOpts] = useState(['All']);
@@ -68,7 +69,7 @@ export default function HistoricalData() {
     if (filters.state && filters.commodity) loadData();
   }, [filters.commodity, filters.state, filters.date, filters.district]); // eslint-disable-line
 
-  async function loadData() {
+  async function loadData(overrideDate) {
     setLoading(true);
     setNoData(false);
     try {
@@ -79,16 +80,23 @@ export default function HistoricalData() {
 
       if (!Array.isArray(pricesData) || pricesData.length === 0) {
         setNoData(true); setRecords([]); setStats(null); setSrc('api');
+        setAvailableDates([]);
         setLoading(false); return;
       }
 
+      // Extract all unique dates and sort descending
+      const allDates = [...new Set(pricesData.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
+      setAvailableDates(allDates);
+
+      // If first load (no date chosen yet), auto-select latest available date
+      const dateToUse = overrideDate || filters.date;
+      if (!overrideDate && filters.date === getToday() && allDates.length > 0 && !allDates.includes(getToday())) {
+        setFilters(p => ({ ...p, date: allDates[0] }));
+        setLoading(false); return; // useEffect will re-trigger with new date
+      }
+
       // Filter by date
-      const selectedDate = filters.date;
-      let filtered = pricesData.filter(p => {
-        const d = p.arrival_date;
-        if (!d) return false;
-        return d === selectedDate;
-      });
+      let filtered = pricesData.filter(p => p.arrival_date === dateToUse);
 
       // Filter by district
       if (filters.district && filters.district !== 'All') {
@@ -103,6 +111,7 @@ export default function HistoricalData() {
     } catch (err) {
       console.warn('Error:', err.message);
       setNoData(true); setRecords([]); setStats(null); setSrc('fallback');
+      setAvailableDates([]);
     } finally { setLoading(false); }
   }
 
@@ -177,9 +186,24 @@ export default function HistoricalData() {
                 No price records found for <strong>{filters.commodity}</strong> in <strong>{filters.state}</strong>
                 {filters.district !== 'All' && <> ({filters.district})</>} on <strong>{dateLabel}</strong>.
               </p>
-              <p style={{ color:'#7a9a7a', fontSize:'0.82rem', marginTop:'1rem' }}>
-                Try selecting a different date, commodity, or state.
-              </p>
+              {availableDates.length > 0 && (
+                <div style={{ marginTop:'1.2rem' }}>
+                  <p style={{ color:'#3a7d44', fontSize:'0.85rem', fontWeight:600, marginBottom:'0.5rem' }}>📅 Available dates with data:</p>
+                  <div style={{ display:'flex', flexWrap:'wrap', gap:6, justifyContent:'center' }}>
+                    {availableDates.slice(0, 10).map(d => (
+                      <button key={d} onClick={() => set('date', d)}
+                        style={{ padding:'6px 12px', background: d === filters.date ? '#3a7d44' : '#e8f5e9', color: d === filters.date ? 'white' : '#2d6235', border:'1px solid #a5d6a7', borderRadius:6, fontSize:'0.8rem', cursor:'pointer', fontFamily:"'DM Sans',sans-serif", fontWeight:500, transition:'all 0.15s' }}>
+                        {new Date(d+'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {availableDates.length === 0 && (
+                <p style={{ color:'#7a9a7a', fontSize:'0.82rem', marginTop:'1rem' }}>
+                  No data exists for this commodity and state. Try a different combination.
+                </p>
+              )}
             </div>
           )}
 
