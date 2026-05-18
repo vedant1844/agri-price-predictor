@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Line, Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { fetchPrices, fetchPriceStats } from '../api';
+import { fetchPrices, fetchPriceStats, fetchCommodities, fetchStates } from '../api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
 
@@ -20,15 +20,38 @@ function genFallback(base) {
 }
 
 export default function HistoricalData() {
-  const [filters, setFilters] = useState({ state:'Gujarat', district:'Ahmedabad', commodity:'Cotton', year:'2026' });
+  const [filters, setFilters] = useState({ state:'', district:'All', commodity:'', year:'2026' });
   const [chartData, setChartData] = useState(null);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(false);
   const [src, setSrc] = useState('loading');
+  const [stateOpts, setStateOpts] = useState([]);
+  const [commodityOpts, setCommodityOpts] = useState([]);
+  const [districtOpts, setDistrictOpts] = useState(['All']);
 
   const set = (k,v) => setFilters(p => ({...p,[k]:v}));
 
-  useEffect(() => { loadData(); }, [filters.commodity, filters.state, filters.year]); // eslint-disable-line
+  // Load states and commodities from DB on mount
+  useEffect(() => {
+    async function loadOptions() {
+      try {
+        const [cRes, sRes] = await Promise.all([fetchCommodities(), fetchStates()]);
+        const states = sRes.states || [];
+        const commodities = cRes.commodities || [];
+        setStateOpts(states.length > 0 ? states : ['Gujarat','Maharashtra','Karnataka','Punjab','Uttar Pradesh','Rajasthan']);
+        setCommodityOpts(commodities.length > 0 ? commodities : ['Cotton','Wheat','Rice','Onion','Apple','Soybean','Groundnut']);
+        if (states.length > 0) setFilters(p => ({ ...p, state: p.state || states[0] }));
+        if (commodities.length > 0) setFilters(p => ({ ...p, commodity: p.commodity || commodities[0] }));
+      } catch {
+        setStateOpts(['Gujarat','Maharashtra','Karnataka','Punjab','Uttar Pradesh','Rajasthan']);
+        setCommodityOpts(['Cotton','Wheat','Rice','Onion','Apple','Soybean','Groundnut']);
+        setFilters(p => ({ ...p, state: p.state || 'Gujarat', commodity: p.commodity || 'Cotton' }));
+      }
+    }
+    loadOptions();
+  }, []);
+
+  useEffect(() => { if (filters.state && filters.commodity) loadData(); }, [filters.commodity, filters.state, filters.year]); // eslint-disable-line
 
   async function loadData() {
     setLoading(true);
@@ -38,8 +61,17 @@ export default function HistoricalData() {
         fetchPriceStats({ commodity: filters.commodity, state: filters.state }),
       ]);
       if (Array.isArray(pricesData) && pricesData.length > 0) {
+        // Extract unique districts from price data
+        const districts = [...new Set(pricesData.map(p => p.district).filter(Boolean))].sort();
+        setDistrictOpts(['All', ...districts]);
+
+        // Filter by district if selected
+        const filtered = filters.district && filters.district !== 'All'
+          ? pricesData.filter(p => p.district === filters.district)
+          : pricesData;
+
         const mMin=Array(12).fill(null), mMod=Array(12).fill(null), mMax=Array(12).fill(null), cnt=Array(12).fill(0);
-        pricesData.forEach(p => {
+        filtered.forEach(p => {
           const d = p.arrival_date || p.date; if (!d) return;
           const dt = new Date(d), mi = dt.getMonth();
           if (filters.year && dt.getFullYear() !== parseInt(filters.year)) return;
@@ -47,7 +79,7 @@ export default function HistoricalData() {
           if (!mMin[mi]) { mMin[mi]=0; mMod[mi]=0; mMax[mi]=0; }
           mMin[mi]+=mn; mMod[mi]+=md; mMax[mi]+=mx; cnt[mi]++;
         });
-        const avg = (a) => a.map((v,i)=> cnt[i]>0 ? Math.round(v/cnt[i]) : null);
+        const avg = (a) => a.map((v,i)=>cnt[i]>0 ? Math.round(v/cnt[i]) : null);
         const fill = (a) => { const valid=a.filter(v=>v!==null); if(!valid.length) return a; const av=Math.round(valid.reduce((s,v)=>s+v,0)/valid.length); return a.map(v=>v!==null?v:av); };
         setChartData({ minData:fill(avg(mMin)), modalData:fill(avg(mMod)), maxData:fill(avg(mMax)) });
         setStats(statsData); setSrc('api');
@@ -91,15 +123,22 @@ export default function HistoricalData() {
           {src==='api' && <div style={{ background:'#e8f5e9', border:'1px solid #a5d6a7', borderRadius:10, padding:'10px 14px', fontSize:'0.84rem', color:'#2e7d32', marginBottom:'1rem' }}>✅ Showing live data from Supabase database</div>}
 
           <div style={{ background:'white', borderRadius:14, padding:'1.5rem', display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(180px,1fr))', gap:'1rem', marginBottom:'1.5rem', boxShadow:'0 2px 12px rgba(0,0,0,0.06)' }}>
-            {[ {label:'State',key:'state',opts:['Gujarat','Maharashtra','Karnataka','Punjab','Uttar Pradesh','Rajasthan']},
-               {label:'District',key:'district',opts:['Ahmedabad','Surat','Vadodara','Rajkot','Bhavnagar']},
-               {label:'Commodity',key:'commodity',opts:['Cotton','Wheat','Rice','Onion','Apple','Soybean','Groundnut']},
-               {label:'Year',key:'year',opts:['2026','2025','2024','2023','2022']} ].map(f => (
-              <div key={f.key}>
-                <label style={{ display:'block', fontSize:'0.8rem', fontWeight:600, color:'#4a6b4a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.4px' }}>{f.label}</label>
-                <select value={filters[f.key]} onChange={e=>set(f.key,e.target.value)} style={selStyle}>{f.opts.map(o=><option key={o}>{o}</option>)}</select>
-              </div>
-            ))}
+            <div>
+              <label style={{ display:'block', fontSize:'0.8rem', fontWeight:600, color:'#4a6b4a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.4px' }}>State</label>
+              <select value={filters.state} onChange={e=>set('state',e.target.value)} style={selStyle}>{stateOpts.map(o=><option key={o}>{o}</option>)}</select>
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:'0.8rem', fontWeight:600, color:'#4a6b4a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.4px' }}>District</label>
+              <select value={filters.district} onChange={e=>set('district',e.target.value)} style={selStyle}>{districtOpts.map(o=><option key={o}>{o}</option>)}</select>
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:'0.8rem', fontWeight:600, color:'#4a6b4a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.4px' }}>Commodity</label>
+              <select value={filters.commodity} onChange={e=>set('commodity',e.target.value)} style={selStyle}>{commodityOpts.map(o=><option key={o}>{o}</option>)}</select>
+            </div>
+            <div>
+              <label style={{ display:'block', fontSize:'0.8rem', fontWeight:600, color:'#4a6b4a', marginBottom:5, textTransform:'uppercase', letterSpacing:'0.4px' }}>Year</label>
+              <select value={filters.year} onChange={e=>set('year',e.target.value)} style={selStyle}>{['2026','2025','2024','2023','2022'].map(o=><option key={o}>{o}</option>)}</select>
+            </div>
           </div>
 
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(160px,1fr))', gap:'1rem', marginBottom:'1.5rem' }}>
