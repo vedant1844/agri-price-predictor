@@ -4,7 +4,6 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import LoadingOverlay from '../components/LoadingOverlay';
 import { fetchPrediction, fetchCommodities, fetchStates } from '../api';
 import { jsPDF } from 'jspdf';
-import 'jspdf-autotable';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -121,103 +120,144 @@ export default function PredictPrice() {
 
   // ── PDF Report Generator ──
   const downloadPDF = () => {
-    if (!result) return;
-    const doc = new jsPDF();
-    const pd = new Date(result.predictionDate + 'T00:00:00');
-    const dateStr = pd.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
-    const now = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    if (!result) { alert('No prediction result to download.'); return; }
+    try {
+      const doc = new jsPDF();
+      const pd = new Date(result.predictionDate + 'T00:00:00');
+      const dateStr = pd.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      const now = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+      const fmt = (n) => 'Rs. ' + Math.round(n).toLocaleString('en-IN');
 
-    // Header
-    doc.setFillColor(58, 125, 68);
-    doc.rect(0, 0, 210, 38, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(20);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Crop Price Prediction Report', 105, 18, { align: 'center' });
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'normal');
-    doc.text(`Generated on ${now}  |  AI-Powered Forecast`, 105, 30, { align: 'center' });
+      // ── Green Header ──
+      doc.setFillColor(58, 125, 68);
+      doc.rect(0, 0, 210, 40, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(22);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Crop Price Prediction Report', 105, 20, { align: 'center' });
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+      doc.text('Generated on ' + now + '  |  AI-Powered Forecast', 105, 32, { align: 'center' });
 
-    // Summary section
-    doc.setTextColor(26, 46, 26);
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Prediction Summary', 14, 50);
-    doc.setDrawColor(58, 125, 68);
-    doc.line(14, 53, 196, 53);
+      let y = 55;
 
-    doc.autoTable({
-      startY: 57,
-      theme: 'grid',
-      headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
-      body: [
+      // ── Prediction Summary ──
+      doc.setTextColor(26, 46, 26);
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Prediction Summary', 14, y);
+      doc.setDrawColor(58, 125, 68);
+      doc.setLineWidth(0.5);
+      doc.line(14, y + 3, 196, y + 3);
+      y += 12;
+
+      const modelLabel = result.modelType === 'hybrid_arima_xgboost' ? 'Hybrid ARIMA + XGBoost'
+        : result.modelType === 'statistical_fallback' ? 'Statistical Estimation' : 'Offline Estimation';
+
+      const summaryRows = [
         ['Crop / Commodity', result.crop],
         ['State', result.state],
         ['Prediction Date', dateStr],
-        ['Model Used', result.modelType === 'hybrid_arima_xgboost' ? 'Hybrid ARIMA + XGBoost' : result.modelType === 'statistical_fallback' ? 'Statistical Estimation' : 'Offline Estimation'],
-      ],
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
-    });
+        ['Model Used', modelLabel],
+      ];
 
-    // Price results
-    let y = doc.lastAutoTable.finalY + 10;
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Price Prediction Results', 14, y);
-    doc.line(14, y + 3, 196, y + 3);
-
-    doc.autoTable({
-      startY: y + 7,
-      theme: 'grid',
-      headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
-      head: [['Metric', 'Value']],
-      body: [
-        ['Current Estimated Price', `Rs. ${Math.round(result.curPrice).toLocaleString('en-IN')} / quintal`],
-        ['Predicted Future Price', `Rs. ${Math.round(result.futPrice).toLocaleString('en-IN')} / quintal`],
-        ['Price Change', `+${result.pct}%`],
-        ['Confidence', `${Math.round(result.conf)}%`],
-        ['Price Range (Min)', `Rs. ${Math.round(result.min).toLocaleString('en-IN')}`],
-        ['Price Range (Max)', `Rs. ${Math.round(result.max).toLocaleString('en-IN')}`],
-        ['Prediction Horizon', `${result.days} days`],
-      ],
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
-    });
-
-    // Year-wise trend
-    if (result.labels && result.labels.length > 0) {
-      y = doc.lastAutoTable.finalY + 10;
-      doc.setFontSize(13);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Year-wise Price Trend', 14, y);
-      doc.line(14, y + 3, 196, y + 3);
-      const trendRows = result.labels.map((label, i) => [
-        label,
-        `Rs. ${(result.prices[i] || 0).toLocaleString('en-IN')}`,
-        `Rs. ${(result.pMin[i] || 0).toLocaleString('en-IN')}`,
-        `Rs. ${(result.pMax[i] || 0).toLocaleString('en-IN')}`,
-      ]);
-      doc.autoTable({
-        startY: y + 7,
-        theme: 'grid',
-        headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
-        head: [['Year', 'Predicted Price', 'Min Confidence', 'Max Confidence']],
-        body: trendRows,
+      doc.setFontSize(10);
+      summaryRows.forEach(([label, value]) => {
+        doc.setFillColor(245, 248, 245);
+        doc.rect(14, y - 5, 182, 10, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(26, 46, 26);
+        doc.text(label, 18, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(value || ''), 80, y);
+        y += 10;
       });
+
+      y += 8;
+
+      // ── Price Results ──
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Price Prediction Results', 14, y);
+      doc.line(14, y + 3, 196, y + 3);
+      y += 12;
+
+      const priceRows = [
+        ['Current Price', fmt(result.curPrice) + ' / quintal'],
+        ['Predicted Future Price', fmt(result.futPrice) + ' / quintal'],
+        ['Price Change', '+' + result.pct + '%'],
+        ['Confidence', Math.round(result.conf) + '%'],
+        ['Min Price Range', fmt(result.min)],
+        ['Max Price Range', fmt(result.max)],
+        ['Prediction Horizon', result.days + ' days'],
+      ];
+
+      doc.setFontSize(10);
+      priceRows.forEach(([label, value], i) => {
+        doc.setFillColor(i % 2 === 0 ? 245 : 255, i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 245 : 255);
+        doc.rect(14, y - 5, 182, 10, 'F');
+        doc.setFont('helvetica', 'bold');
+        doc.setTextColor(26, 46, 26);
+        doc.text(label, 18, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(String(value), 80, y);
+        y += 10;
+      });
+
+      y += 8;
+
+      // ── Year-wise Trend ──
+      if (result.labels && result.labels.length > 0) {
+        if (y > 230) { doc.addPage(); y = 20; }
+        doc.setFontSize(14);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Year-wise Price Trend', 14, y);
+        doc.line(14, y + 3, 196, y + 3);
+        y += 12;
+
+        // Table header
+        doc.setFillColor(58, 125, 68);
+        doc.rect(14, y - 5, 182, 10, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFontSize(9);
+        doc.setFont('helvetica', 'bold');
+        doc.text('Year', 20, y);
+        doc.text('Predicted Price', 65, y);
+        doc.text('Min Confidence', 110, y);
+        doc.text('Max Confidence', 155, y);
+        y += 10;
+
+        doc.setTextColor(26, 46, 26);
+        doc.setFont('helvetica', 'normal');
+        result.labels.forEach((label, i) => {
+          doc.setFillColor(i % 2 === 0 ? 245 : 255, i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 245 : 255);
+          doc.rect(14, y - 5, 182, 10, 'F');
+          doc.text(String(label), 20, y);
+          doc.text(fmt(result.prices[i] || 0), 65, y);
+          doc.text(fmt(result.pMin[i] || 0), 110, y);
+          doc.text(fmt(result.pMax[i] || 0), 155, y);
+          y += 10;
+        });
+      }
+
+      // ── Disclaimer Footer ──
+      y += 5;
+      if (y > 260) { doc.addPage(); y = 20; }
+      doc.setFillColor(255, 248, 225);
+      doc.roundedRect(14, y, 182, 22, 3, 3, 'F');
+      doc.setFontSize(8);
+      doc.setTextColor(124, 96, 0);
+      doc.text('Disclaimer: This prediction is AI-generated based on historical data. Actual prices may vary', 18, y + 7);
+      doc.text('due to weather, market conditions, and other factors. Use as a guide, not an absolute forecast.', 18, y + 13);
+      doc.setTextColor(150, 150, 150);
+      doc.setFontSize(7);
+      doc.text('AgriPaiya - Crop Price Prediction System | Powered by Hybrid ARIMA + XGBoost', 105, y + 20, { align: 'center' });
+
+      doc.save(result.crop + '_' + result.state + '_prediction.pdf');
+    } catch (err) {
+      console.error('PDF generation error:', err);
+      alert('Error generating PDF: ' + err.message);
     }
-
-    // Footer disclaimer
-    y = doc.lastAutoTable.finalY + 12;
-    if (y > 260) { doc.addPage(); y = 20; }
-    doc.setFillColor(255, 248, 225);
-    doc.roundedRect(14, y, 182, 22, 3, 3, 'F');
-    doc.setFontSize(8);
-    doc.setTextColor(124, 96, 0);
-    doc.text('Disclaimer: This prediction is AI-generated based on historical data. Actual prices may vary due to', 18, y + 7);
-    doc.text('weather, market conditions, and other factors. Use as a guide only — not an absolute forecast.', 18, y + 13);
-    doc.setTextColor(150, 150, 150);
-    doc.text('AgriPaiya - Crop Price Prediction System | Powered by Hybrid ARIMA + XGBoost', 105, y + 20, { align: 'center' });
-
-    doc.save(`${result.crop}_${result.state}_prediction_${result.predictionDate}.pdf`);
   };
 
   return (
