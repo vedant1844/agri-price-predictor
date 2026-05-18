@@ -2,15 +2,20 @@
 Standalone script to fetch agricultural price data from the
 Government of India API and store directly in Supabase (PostgreSQL).
 
-Designed to run via GitHub Actions daily, but can also be run locally.
-Fetches ALL available records in small paginated batches for reliability.
+Designed to run via GitHub Actions daily (Ubuntu runner).
+Uses curl for HTTP requests — much more reliable than Python requests
+for the slow govt API (same approach as the PowerShell local script).
+
+Can also be run locally on Windows/Linux/Mac.
 """
 
 import os
 import sys
+import json
 import time
-import requests
-from datetime import datetime
+import subprocess
+import platform
+from datetime import datetime, timezone
 
 # Try to load .env for local development
 try:
@@ -30,27 +35,61 @@ def get_db_connection():
     return psycopg2.connect(db_url)
 
 
-def fetch_page(base_url, limit, offset, timeout=30):
-    """Fetch one page from the govt API with retries."""
+def fetch_page_curl(base_url, limit, offset, timeout=120):
+    """
+    Fetch one page from the govt API using curl (Linux/Mac)
+    or PowerShell (Windows). These handle slow connections much
+    better than Python's requests library.
+    """
     separator = "&" if "?" in base_url else "?"
     url = f"{base_url}{separator}limit={limit}&offset={offset}"
 
-    for attempt in range(1, 4):
-        try:
-            response = requests.get(url, timeout=timeout)
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.Timeout:
-            print(f"  Attempt {attempt}/3: timeout at offset={offset}")
-            time.sleep(3 * attempt)
-        except requests.exceptions.HTTPError as e:
-            print(f"  Attempt {attempt}/3: HTTP {response.status_code} at offset={offset}")
-            time.sleep(5 * attempt)
-        except requests.exceptions.ConnectionError:
-            print(f"  Attempt {attempt}/3: connection error at offset={offset}")
-            time.sleep(5 * attempt)
+    try:
+        if platform.system() == "Windows":
+            # Use PowerShell on Windows (proven to work)
+            ps_cmd = (
+                f"$ProgressPreference='SilentlyContinue'; "
+                f"try {{ $r = Invoke-RestMethod -Uri '{url}' "
+                f"-TimeoutSec {timeout} -UseBasicParsing; "
+                f"$r | ConvertTo-Json -Depth 10 -Compress }} "
+                f"catch {{ Write-Error $_.Exception.Message; exit 1 }}"
+            )
+            result = subprocess.run(
+                ["powershell", "-Command", ps_cmd],
+                capture_output=True, text=True,
+                timeout=timeout + 30, encoding='utf-8'
+            )
+        else:
+            # Use curl on Linux/Mac (GitHub Actions runners)
+            result = subprocess.run(
+                [
+                    "curl", "-s", "-f",
+                    "--max-time", str(timeout),
+                    "--retry", "2",
+                    "--retry-delay", "5",
+                    "--retry-max-time", str(timeout * 2),
+                    url
+                ],
+                capture_output=True, text=True,
+                timeout=timeout + 30
+            )
 
-    return None
+        if result.returncode != 0:
+            stderr = result.stderr.strip()[:200] if result.stderr else "unknown error"
+            print(f"HTTP error: {stderr}")
+            return None
+
+        return json.loads(result.stdout)
+
+    except subprocess.TimeoutExpired:
+        print("subprocess timeout")
+        return None
+    except json.JSONDecodeError as e:
+        print(f"JSON parse error: {e}")
+        return None
+    except Exception as e:
+        print(f"unexpected error: {e}")
+        return None
 
 
 def insert_records(conn, records):
@@ -98,7 +137,7 @@ def insert_records(conn, records):
                 "quintal",
                 "data.gov.in",
                 arrival_date,
-                datetime.utcnow(),
+                datetime.now(timezone.utc),
             ))
             inserted += 1
 
@@ -119,26 +158,36 @@ def main():
     PAGE_SIZE = 20
     MAX_PAGES = 50  # Up to 1000 records per run
 
-    print(f"Starting data fetch at {datetime.utcnow().isoformat()}")
+    print(f"{'='*60}")
+    print(f"Agri Price Data Fetch")
+    print(f"Started: {datetime.now(timezone.utc).isoformat()}")
+    print(f"Platform: {platform.system()}")
+    print(f"HTTP client: {'PowerShell' if platform.system() == 'Windows' else 'curl'}")
     print(f"Config: {PAGE_SIZE} records/page, up to {MAX_PAGES} pages")
+    print(f"{'='*60}\n")
 
     conn = get_db_connection()
+    print("Connected to database successfully\n")
+
     total_stored = 0
     failed_pages = 0
 
     for page in range(MAX_PAGES):
         offset = page * PAGE_SIZE
-        print(f"Page {page + 1}/{MAX_PAGES} (offset={offset})...", end=" ")
+        print(f"Page {page + 1}/{MAX_PAGES} (offset={offset})...", end=" ", flush=True)
 
-        data = fetch_page(api_url, limit=PAGE_SIZE, offset=offset, timeout=45)
+        data = fetch_page_curl(api_url, limit=PAGE_SIZE, offset=offset, timeout=90)
 
         if data is None:
             failed_pages += 1
             print("FAILED")
             if failed_pages >= 5:
-                print("Too many failures, stopping.")
+                print("\nToo many consecutive failures, stopping.")
                 break
             continue
+        else:
+            # Reset consecutive failure count on success
+            failed_pages = 0
 
         records = data.get("records", [])
         if not records:
@@ -153,11 +202,17 @@ def main():
 
     conn.close()
 
-    print(f"\nDone! Stored {total_stored} records, {failed_pages} pages failed.")
+    print(f"\n{'='*60}")
+    print(f"RESULT: {total_stored} records stored")
+    print(f"Failed pages: {failed_pages}")
+    print(f"Finished: {datetime.now(timezone.utc).isoformat()}")
+    print(f"{'='*60}")
 
     if total_stored == 0:
-        print("WARNING: No records were stored!")
+        print("\nWARNING: No records were stored!")
         sys.exit(1)
+    else:
+        print(f"\nSUCCESS: {total_stored} records saved to Supabase")
 
 
 if __name__ == "__main__":

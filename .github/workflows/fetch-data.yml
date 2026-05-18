@@ -9,7 +9,7 @@ on:
 jobs:
   fetch-data:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -21,10 +21,20 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install requests psycopg2-binary python-dotenv
+        run: pip install psycopg2-binary python-dotenv
+
+      - name: Wake up Render backend
+        run: |
+          echo "Pinging Render to keep it awake..."
+          curl -s -o /dev/null -w "HTTP %{http_code}" https://agri-backend-y21k.onrender.com/health || true
+          echo ""
 
       - name: Fetch data from Govt API and store in Supabase
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           AGRI_API_URL: ${{ secrets.AGRI_API_URL }}
         run: python scripts/fetch_to_db.py
+
+      - name: Summary
+        if: always()
+        run: echo "Workflow completed at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
