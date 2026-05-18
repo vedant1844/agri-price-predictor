@@ -119,10 +119,12 @@ export async function fetchStates() {
 }
 
 /**
- * Get list of available districts from the database.
+ * Get list of available districts from the database, optionally filtered by state.
  */
-export async function fetchDistricts() {
-  return apiFetch('/districts');
+export async function fetchDistricts(state) {
+  const params = new URLSearchParams();
+  if (state) params.set('state', state);
+  return apiFetch(`/districts?${params}`);
 }
 
 /**

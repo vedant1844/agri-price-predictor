@@ -82,9 +82,9 @@ def states():
 
 
 @router.get("/districts")
-def districts():
-    """Get list of unique districts in the database."""
-    return {"districts": get_distinct_districts()}
+def districts(state: Optional[str] = Query(None, description="Filter by state")):
+    """Get list of unique districts in the database, optionally filtered by state."""
+    return {"districts": get_distinct_districts(state=state)}
 
 
 # ─── Prediction ──────────────────────────────────────────────────

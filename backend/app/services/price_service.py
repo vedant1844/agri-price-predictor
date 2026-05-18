@@ -227,11 +227,14 @@ def get_distinct_states():
         db.close()
 
 
-def get_distinct_districts():
-    """Return list of unique district names from the database."""
+def get_distinct_districts(state=None):
+    """Return list of unique district names from the database, optionally filtered by state."""
     db = SessionLocal()
     try:
-        result = db.query(Price.district).distinct().all()
+        query = db.query(Price.district).distinct()
+        if state:
+            query = query.filter(func.lower(Price.state) == state.lower())
+        result = query.all()
         return sorted([r[0] for r in result if r[0]])
     finally:
         db.close()

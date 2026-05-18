@@ -31,17 +31,15 @@ export default function HistoricalData() {
 
   const set = (k,v) => setFilters(p => ({...p,[k]:v}));
 
-  // Load states, commodities, and districts from DB on mount
+  // Load states and commodities from DB on mount
   useEffect(() => {
     async function loadOptions() {
       try {
-        const [cRes, sRes, dRes] = await Promise.all([fetchCommodities(), fetchStates(), fetchDistricts()]);
+        const [cRes, sRes] = await Promise.all([fetchCommodities(), fetchStates()]);
         const states = sRes.states || [];
         const commodities = cRes.commodities || [];
-        const districts = dRes.districts || [];
         setStateOpts(states.length > 0 ? states : ['Gujarat','Maharashtra','Karnataka','Punjab','Uttar Pradesh','Rajasthan']);
         setCommodityOpts(commodities.length > 0 ? commodities : ['Cotton','Wheat','Rice','Onion','Apple','Soybean','Groundnut']);
-        setDistrictOpts(['All', ...districts]);
         if (states.length > 0) setFilters(p => ({ ...p, state: p.state || states[0] }));
         if (commodities.length > 0) setFilters(p => ({ ...p, commodity: p.commodity || commodities[0] }));
       } catch {
@@ -53,7 +51,23 @@ export default function HistoricalData() {
     loadOptions();
   }, []);
 
-  useEffect(() => { if (filters.state && filters.commodity) loadData(); }, [filters.commodity, filters.state, filters.year]); // eslint-disable-line
+  // Re-fetch districts when state changes
+  useEffect(() => {
+    if (!filters.state) return;
+    async function loadDistricts() {
+      try {
+        const dRes = await fetchDistricts(filters.state);
+        const districts = dRes.districts || [];
+        setDistrictOpts(['All', ...districts]);
+        setFilters(p => ({ ...p, district: 'All' }));
+      } catch {
+        setDistrictOpts(['All']);
+      }
+    }
+    loadDistricts();
+  }, [filters.state]); // eslint-disable-line
+
+  useEffect(() => { if (filters.state && filters.commodity) loadData(); }, [filters.commodity, filters.state, filters.year, filters.district]); // eslint-disable-line
 
   async function loadData() {
     setLoading(true);
