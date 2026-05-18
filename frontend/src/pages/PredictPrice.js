@@ -3,6 +3,8 @@ import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
 import LoadingOverlay from '../components/LoadingOverlay';
 import { fetchPrediction, fetchCommodities, fetchStates } from '../api';
+import { jsPDF } from 'jspdf';
+import 'jspdf-autotable';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -19,8 +21,18 @@ const inp = {
   field: { width: '100%', padding: '12px 16px', border: '1.5px solid rgba(58,125,68,0.22)', borderRadius: 10, fontFamily: "'DM Sans', sans-serif", fontSize: '0.95rem', color: '#1a2e1a', background: 'white', outline: 'none', appearance: 'none', WebkitAppearance: 'none' },
 };
 
+// Helper: get default prediction date (6 months from now)
+function getDefaultDate() {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 6);
+  return d.toISOString().split('T')[0];
+}
+function getToday() { return new Date().toISOString().split('T')[0]; }
+
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+
 export default function PredictPrice() {
-  const [form, setForm] = useState({ crop: '', state: '', month: '4', curYear: '2026', futYear: '2028' });
+  const [form, setForm] = useState({ crop: '', state: '', predictionDate: getDefaultDate() });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
@@ -29,88 +41,64 @@ export default function PredictPrice() {
   const [optionsLoading, setOptionsLoading] = useState(true);
   const resultRef = useRef(null);
 
-  // Fetch crop types and states from the database on mount
   useEffect(() => {
     async function loadOptions() {
       setOptionsLoading(true);
       try {
-        const [commoditiesRes, statesRes] = await Promise.all([
-          fetchCommodities(),
-          fetchStates(),
-        ]);
-
+        const [commoditiesRes, statesRes] = await Promise.all([fetchCommodities(), fetchStates()]);
         const dbCrops = (commoditiesRes.commodities || []).map(c => [c, c]);
         const dbStates = (statesRes.states || []).map(s => [s, s]);
-
         setCropOptions(dbCrops.length > 0 ? dbCrops : FALLBACK_CROPS);
         setStateOptions(dbStates.length > 0 ? dbStates : FALLBACK_STATES);
-
-        // Set default selections to first item from DB
         if (dbCrops.length > 0) setForm(p => ({ ...p, crop: p.crop || dbCrops[0][0] }));
         if (dbStates.length > 0) setForm(p => ({ ...p, state: p.state || dbStates[0][0] }));
       } catch (err) {
-        console.warn('Could not load options from backend, using fallbacks:', err.message);
         setCropOptions(FALLBACK_CROPS);
         setStateOptions(FALLBACK_STATES);
         setForm(p => ({ ...p, crop: p.crop || 'Wheat', state: p.state || 'Karnataka' }));
-      } finally {
-        setOptionsLoading(false);
-      }
+      } finally { setOptionsLoading(false); }
     }
     loadOptions();
   }, []);
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
+  // Derive month/year from the selected prediction date
+  const parsedDate = new Date(form.predictionDate + 'T00:00:00');
+  const futMonth = parsedDate.getMonth() + 1;
+  const futYear = parsedDate.getFullYear();
+  const curYear = new Date().getFullYear();
+
   const predict = async () => {
-    const curY = parseInt(form.curYear), futY = parseInt(form.futYear);
-    if (futY <= curY) { alert('Future year must be greater than current year.'); return; }
+    if (futYear < curYear) { alert('Please select a future date.'); return; }
+    if (futYear === curYear && futMonth <= new Date().getMonth() + 1) { alert('Please select a future date.'); return; }
 
     setLoading(true);
     setError(null);
+    const effectiveFutYear = Math.max(futYear, curYear + 1);
 
     try {
-      // ✅ Call the real backend API
       const data = await fetchPrediction({
-        commodity: form.crop,
-        state: form.state,
-        month: parseInt(form.month),
-        currentYear: curY,
-        futureYear: futY,
+        commodity: form.crop, state: form.state,
+        month: futMonth, currentYear: curYear, futureYear: effectiveFutYear,
       });
-
-      const years = futY - curY;
+      const years = effectiveFutYear - curYear;
       setResult({
-        curPrice: data.current_price,
-        futPrice: data.future_price,
-        conf: data.confidence,
-        range: data.price_range,
-        pct: data.pct_change,
-        days: data.days,
-        min: data.min_price,
-        max: data.max_price,
-        labels: data.chart?.labels || [],
-        prices: data.chart?.prices || [],
-        pMin: data.chart?.p_min || [],
-        pMax: data.chart?.p_max || [],
-        years: years,
-        crop: form.crop,
-        state: form.state,
-        modelType: data.model_type,
-        growthRate: data.growth_rate,
-        advice: data.advice,
+        curPrice: data.current_price, futPrice: data.future_price,
+        conf: data.confidence, range: data.price_range, pct: data.pct_change,
+        days: data.days, min: data.min_price, max: data.max_price,
+        labels: data.chart?.labels || [], prices: data.chart?.prices || [],
+        pMin: data.chart?.p_min || [], pMax: data.chart?.p_max || [],
+        years, crop: form.crop, state: form.state,
+        predictionDate: form.predictionDate,
+        modelType: data.model_type, growthRate: data.growth_rate, advice: data.advice,
       });
-
     } catch (err) {
-      console.warn('Backend API unavailable, using local fallback:', err.message);
-      setError('Server is waking up... Using offline estimation. Try again in 30 seconds for AI prediction.');
-
-      // ⚠ Offline fallback — local calculation (same as original)
+      setError('Server is waking up... Using offline estimation. Try again in 30s.');
       const cropKey = form.crop.toLowerCase();
       const base = CROP_BASE[cropKey] || 2500;
-      const stateKey = form.state.toLowerCase();
-      const mult = STATE_MULT[stateKey] || 1.0;
-      const years = futY - curY;
+      const mult = STATE_MULT[form.state.toLowerCase()] || 1.0;
+      const years = effectiveFutYear - curYear;
       const growth = 0.04 + Math.random() * 0.06;
       const curPrice = Math.round(base * mult);
       const futPrice = Math.round(curPrice * Math.pow(1 + growth, years));
@@ -118,22 +106,119 @@ export default function PredictPrice() {
       const range = Math.round(futPrice * 0.12);
       const pct = (((futPrice - curPrice) / curPrice) * 100).toFixed(1);
       const labels = [], prices = [], pMin = [], pMax = [];
-      for (let y = curY; y <= futY; y++) {
+      for (let y = curYear; y <= effectiveFutYear; y++) {
         labels.push(y.toString());
-        const p = Math.round(curPrice * Math.pow(1 + growth, y - curY));
+        const p = Math.round(curPrice * Math.pow(1 + growth, y - curYear));
         prices.push(p); pMin.push(Math.round(p * 0.91)); pMax.push(Math.round(p * 1.09));
       }
-      setResult({ curPrice, futPrice, conf, range, pct, days: years * 365, min: futPrice - range, max: futPrice + range, labels, prices, pMin, pMax, years, crop: form.crop, state: form.state, modelType: 'offline_fallback', growthRate: (growth * 100).toFixed(1), advice: null });
-    } finally {
-      setLoading(false);
-    }
+      setResult({ curPrice, futPrice, conf, range, pct, days: years * 365, min: futPrice - range, max: futPrice + range, labels, prices, pMin, pMax, years, crop: form.crop, state: form.state, predictionDate: form.predictionDate, modelType: 'offline_fallback', growthRate: (growth * 100).toFixed(1), advice: null });
+    } finally { setLoading(false); }
   };
 
   useEffect(() => {
     if (result && resultRef.current) resultRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [result]);
 
-  const monthOptions = [['1','January'],['2','February'],['3','March'],['4','April'],['5','May'],['6','June'],['7','July'],['8','August'],['9','September'],['10','October'],['11','November'],['12','December']];
+  // ── PDF Report Generator ──
+  const downloadPDF = () => {
+    if (!result) return;
+    const doc = new jsPDF();
+    const pd = new Date(result.predictionDate + 'T00:00:00');
+    const dateStr = pd.toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+    const now = new Date().toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
+
+    // Header
+    doc.setFillColor(58, 125, 68);
+    doc.rect(0, 0, 210, 38, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Crop Price Prediction Report', 105, 18, { align: 'center' });
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generated on ${now}  |  AI-Powered Forecast`, 105, 30, { align: 'center' });
+
+    // Summary section
+    doc.setTextColor(26, 46, 26);
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Prediction Summary', 14, 50);
+    doc.setDrawColor(58, 125, 68);
+    doc.line(14, 53, 196, 53);
+
+    doc.autoTable({
+      startY: 57,
+      theme: 'grid',
+      headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
+      body: [
+        ['Crop / Commodity', result.crop],
+        ['State', result.state],
+        ['Prediction Date', dateStr],
+        ['Model Used', result.modelType === 'hybrid_arima_xgboost' ? 'Hybrid ARIMA + XGBoost' : result.modelType === 'statistical_fallback' ? 'Statistical Estimation' : 'Offline Estimation'],
+      ],
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
+    });
+
+    // Price results
+    let y = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(13);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Price Prediction Results', 14, y);
+    doc.line(14, y + 3, 196, y + 3);
+
+    doc.autoTable({
+      startY: y + 7,
+      theme: 'grid',
+      headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
+      head: [['Metric', 'Value']],
+      body: [
+        ['Current Estimated Price', `Rs. ${Math.round(result.curPrice).toLocaleString('en-IN')} / quintal`],
+        ['Predicted Future Price', `Rs. ${Math.round(result.futPrice).toLocaleString('en-IN')} / quintal`],
+        ['Price Change', `+${result.pct}%`],
+        ['Confidence', `${Math.round(result.conf)}%`],
+        ['Price Range (Min)', `Rs. ${Math.round(result.min).toLocaleString('en-IN')}`],
+        ['Price Range (Max)', `Rs. ${Math.round(result.max).toLocaleString('en-IN')}`],
+        ['Prediction Horizon', `${result.days} days`],
+      ],
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 55 } },
+    });
+
+    // Year-wise trend
+    if (result.labels && result.labels.length > 0) {
+      y = doc.lastAutoTable.finalY + 10;
+      doc.setFontSize(13);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Year-wise Price Trend', 14, y);
+      doc.line(14, y + 3, 196, y + 3);
+      const trendRows = result.labels.map((label, i) => [
+        label,
+        `Rs. ${(result.prices[i] || 0).toLocaleString('en-IN')}`,
+        `Rs. ${(result.pMin[i] || 0).toLocaleString('en-IN')}`,
+        `Rs. ${(result.pMax[i] || 0).toLocaleString('en-IN')}`,
+      ]);
+      doc.autoTable({
+        startY: y + 7,
+        theme: 'grid',
+        headStyles: { fillColor: [58, 125, 68], textColor: 255, fontStyle: 'bold' },
+        head: [['Year', 'Predicted Price', 'Min Confidence', 'Max Confidence']],
+        body: trendRows,
+      });
+    }
+
+    // Footer disclaimer
+    y = doc.lastAutoTable.finalY + 12;
+    if (y > 260) { doc.addPage(); y = 20; }
+    doc.setFillColor(255, 248, 225);
+    doc.roundedRect(14, y, 182, 22, 3, 3, 'F');
+    doc.setFontSize(8);
+    doc.setTextColor(124, 96, 0);
+    doc.text('Disclaimer: This prediction is AI-generated based on historical data. Actual prices may vary due to', 18, y + 7);
+    doc.text('weather, market conditions, and other factors. Use as a guide only — not an absolute forecast.', 18, y + 13);
+    doc.setTextColor(150, 150, 150);
+    doc.text('AgriPaiya - Crop Price Prediction System | Powered by Hybrid ARIMA + XGBoost', 105, y + 20, { align: 'center' });
+
+    doc.save(`${result.crop}_${result.state}_prediction_${result.predictionDate}.pdf`);
+  };
 
   return (
     <>
@@ -149,18 +234,12 @@ export default function PredictPrice() {
           <FormGroup label="Select State">
             <SelectField value={form.state} onChange={v => set('state', v)} options={stateOptions} />
           </FormGroup>
-          <FormGroup label="Select Month">
-            <SelectField value={form.month} onChange={v => set('month', v)} options={monthOptions} />
+          <FormGroup label="Prediction Date">
+            <input type="date" value={form.predictionDate} onChange={e => set('predictionDate', e.target.value)} min={getToday()} max="2035-12-31" style={inp.field} />
+            <div style={{ fontSize: '0.78rem', color: '#6b8e6b', marginTop: 4 }}>
+              Forecast for: {MONTHS[parsedDate.getMonth()]} {parsedDate.getFullYear()}
+            </div>
           </FormGroup>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem', marginBottom: '1.4rem' }}>
-            <FormGroup label="Current Year">
-              <input type="number" value={form.curYear} onChange={e => set('curYear', e.target.value)} min="2020" max="2030" style={inp.field} />
-            </FormGroup>
-            <FormGroup label="Future Year">
-              <input type="number" value={form.futYear} onChange={e => set('futYear', e.target.value)} min="2021" max="2035" style={inp.field} />
-            </FormGroup>
-          </div>
 
           <PredictButton onClick={predict} />
 
@@ -178,6 +257,7 @@ export default function PredictPrice() {
               <RangeCard result={result} />
               <ChartCard result={result} />
               <AdviceCard result={result} />
+              <DownloadPDFButton onClick={downloadPDF} />
             </div>
           )}
         </div>
@@ -322,5 +402,16 @@ function AdviceCard({ result }) {
         </div>
       ))}
     </div>
+  );
+}
+
+function DownloadPDFButton({ onClick }) {
+  const [hov, setHov] = useState(false);
+  return (
+    <button onClick={onClick} onMouseEnter={() => setHov(true)} onMouseLeave={() => setHov(false)}
+      style={{ width: '100%', padding: '14px', background: hov ? 'linear-gradient(135deg, #1565c0, #0d47a1)' : 'linear-gradient(135deg, #1976d2, #1565c0)', color: 'white', border: 'none', borderRadius: 12, fontSize: '0.95rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s', fontFamily: "'DM Sans', sans-serif", transform: hov ? 'translateY(-1px)' : 'none', boxShadow: hov ? '0 6px 20px rgba(25,118,210,0.35)' : '0 2px 8px rgba(25,118,210,0.2)', marginTop: '1.2rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Download PDF Report
+    </button>
   );
 }
