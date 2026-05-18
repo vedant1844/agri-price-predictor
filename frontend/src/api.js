@@ -119,6 +119,13 @@ export async function fetchStates() {
 }
 
 /**
+ * Get list of available districts from the database.
+ */
+export async function fetchDistricts() {
+  return apiFetch('/districts');
+}
+
+/**
  * Trigger data update from the government API.
  */
 export async function triggerDataUpdate() {

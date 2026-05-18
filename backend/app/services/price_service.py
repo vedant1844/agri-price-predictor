@@ -227,6 +227,16 @@ def get_distinct_states():
         db.close()
 
 
+def get_distinct_districts():
+    """Return list of unique district names from the database."""
+    db = SessionLocal()
+    try:
+        result = db.query(Price.district).distinct().all()
+        return sorted([r[0] for r in result if r[0]])
+    finally:
+        db.close()
+
+
 def get_price_stats(commodity=None, state=None):
     """
     Get aggregated price statistics for a commodity/state.

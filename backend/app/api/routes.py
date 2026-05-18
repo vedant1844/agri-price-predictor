@@ -7,6 +7,7 @@ from app.services.price_service import (
     get_cached_prices,
     get_distinct_commodities,
     get_distinct_states,
+    get_distinct_districts,
     get_price_stats,
 )
 from app.services.prediction_service import get_prediction
@@ -78,6 +79,12 @@ def commodities():
 def states():
     """Get list of unique states in the database."""
     return {"states": get_distinct_states()}
+
+
+@router.get("/districts")
+def districts():
+    """Get list of unique districts in the database."""
+    return {"districts": get_distinct_districts()}
 
 
 # ─── Prediction ──────────────────────────────────────────────────

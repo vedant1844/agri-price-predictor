@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Line, Bar } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend } from 'chart.js';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { fetchPrices, fetchPriceStats, fetchCommodities, fetchStates } from '../api';
+import { fetchPrices, fetchPriceStats, fetchCommodities, fetchStates, fetchDistricts } from '../api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, BarElement, Title, Tooltip, Legend);
 
@@ -31,15 +31,17 @@ export default function HistoricalData() {
 
   const set = (k,v) => setFilters(p => ({...p,[k]:v}));
 
-  // Load states and commodities from DB on mount
+  // Load states, commodities, and districts from DB on mount
   useEffect(() => {
     async function loadOptions() {
       try {
-        const [cRes, sRes] = await Promise.all([fetchCommodities(), fetchStates()]);
+        const [cRes, sRes, dRes] = await Promise.all([fetchCommodities(), fetchStates(), fetchDistricts()]);
         const states = sRes.states || [];
         const commodities = cRes.commodities || [];
+        const districts = dRes.districts || [];
         setStateOpts(states.length > 0 ? states : ['Gujarat','Maharashtra','Karnataka','Punjab','Uttar Pradesh','Rajasthan']);
         setCommodityOpts(commodities.length > 0 ? commodities : ['Cotton','Wheat','Rice','Onion','Apple','Soybean','Groundnut']);
+        setDistrictOpts(['All', ...districts]);
         if (states.length > 0) setFilters(p => ({ ...p, state: p.state || states[0] }));
         if (commodities.length > 0) setFilters(p => ({ ...p, commodity: p.commodity || commodities[0] }));
       } catch {
