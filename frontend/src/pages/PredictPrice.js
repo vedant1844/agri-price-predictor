@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Line } from 'react-chartjs-2';
 import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler } from 'chart.js';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { fetchPrediction } from '../api';
+import { fetchPrediction, fetchCommodities, fetchStates } from '../api';
 
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
@@ -10,17 +10,55 @@ ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, T
 const CROP_BASE = { wheat: 2400, rice: 2800, cotton: 6500, sugarcane: 350, maize: 2000, soybean: 4500, tomato: 1800, onion: 2200, potato: 1600, apple: 7200, banana: 2000, groundnut: 5500 };
 const STATE_MULT = { karnataka: 1.05, maharashtra: 1.08, gujarat: 1.10, punjab: 1.12, haryana: 1.09, up: 0.98, mp: 0.97, rajasthan: 1.02, ap: 1.04, telangana: 1.06, 'tamil-nadu': 1.07, wb: 1.01 };
 
+// Hardcoded fallbacks in case the API is unreachable
+const FALLBACK_CROPS = [['Wheat','Wheat'],['Rice','Rice'],['Cotton','Cotton'],['Sugarcane','Sugarcane'],['Maize','Maize'],['Soyabean','Soyabean'],['Tomato','Tomato'],['Onion','Onion'],['Potato','Potato'],['Apple','Apple'],['Banana','Banana'],['Groundnut','Groundnut']];
+const FALLBACK_STATES = [['Karnataka','Karnataka'],['Maharashtra','Maharashtra'],['Gujarat','Gujarat'],['Punjab','Punjab'],['Haryana','Haryana'],['Uttar Pradesh','Uttar Pradesh'],['Madhya Pradesh','Madhya Pradesh'],['Rajasthan','Rajasthan'],['Andhra Pradesh','Andhra Pradesh'],['Telangana','Telangana'],['Tamil Nadu','Tamil Nadu'],['West Bengal','West Bengal']];
+
 const inp = {
   label: { display: 'block', fontSize: '0.88rem', fontWeight: 600, color: '#1a2e1a', marginBottom: 6 },
   field: { width: '100%', padding: '12px 16px', border: '1.5px solid rgba(58,125,68,0.22)', borderRadius: 10, fontFamily: "'DM Sans', sans-serif", fontSize: '0.95rem', color: '#1a2e1a', background: 'white', outline: 'none', appearance: 'none', WebkitAppearance: 'none' },
 };
 
 export default function PredictPrice() {
-  const [form, setForm] = useState({ crop: 'wheat', state: 'karnataka', month: '4', curYear: '2026', futYear: '2028' });
+  const [form, setForm] = useState({ crop: '', state: '', month: '4', curYear: '2026', futYear: '2028' });
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const [cropOptions, setCropOptions] = useState([]);
+  const [stateOptions, setStateOptions] = useState([]);
+  const [optionsLoading, setOptionsLoading] = useState(true);
   const resultRef = useRef(null);
+
+  // Fetch crop types and states from the database on mount
+  useEffect(() => {
+    async function loadOptions() {
+      setOptionsLoading(true);
+      try {
+        const [commoditiesRes, statesRes] = await Promise.all([
+          fetchCommodities(),
+          fetchStates(),
+        ]);
+
+        const dbCrops = (commoditiesRes.commodities || []).map(c => [c, c]);
+        const dbStates = (statesRes.states || []).map(s => [s, s]);
+
+        setCropOptions(dbCrops.length > 0 ? dbCrops : FALLBACK_CROPS);
+        setStateOptions(dbStates.length > 0 ? dbStates : FALLBACK_STATES);
+
+        // Set default selections to first item from DB
+        if (dbCrops.length > 0) setForm(p => ({ ...p, crop: p.crop || dbCrops[0][0] }));
+        if (dbStates.length > 0) setForm(p => ({ ...p, state: p.state || dbStates[0][0] }));
+      } catch (err) {
+        console.warn('Could not load options from backend, using fallbacks:', err.message);
+        setCropOptions(FALLBACK_CROPS);
+        setStateOptions(FALLBACK_STATES);
+        setForm(p => ({ ...p, crop: p.crop || 'Wheat', state: p.state || 'Karnataka' }));
+      } finally {
+        setOptionsLoading(false);
+      }
+    }
+    loadOptions();
+  }, []);
 
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
 
@@ -68,8 +106,10 @@ export default function PredictPrice() {
       setError('Server is waking up... Using offline estimation. Try again in 30 seconds for AI prediction.');
 
       // ⚠ Offline fallback — local calculation (same as original)
-      const base = CROP_BASE[form.crop] || 2500;
-      const mult = STATE_MULT[form.state] || 1.0;
+      const cropKey = form.crop.toLowerCase();
+      const base = CROP_BASE[cropKey] || 2500;
+      const stateKey = form.state.toLowerCase();
+      const mult = STATE_MULT[stateKey] || 1.0;
       const years = futY - curY;
       const growth = 0.04 + Math.random() * 0.06;
       const curPrice = Math.round(base * mult);
@@ -93,8 +133,6 @@ export default function PredictPrice() {
     if (result && resultRef.current) resultRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [result]);
 
-  const cropOptions = [['wheat','Wheat'],['rice','Rice'],['cotton','Cotton'],['sugarcane','Sugarcane'],['maize','Maize'],['soybean','Soybean'],['tomato','Tomato'],['onion','Onion'],['potato','Potato'],['apple','Apple'],['banana','Banana'],['groundnut','Groundnut']];
-  const stateOptions = [['karnataka','Karnataka'],['maharashtra','Maharashtra'],['gujarat','Gujarat'],['punjab','Punjab'],['haryana','Haryana'],['up','Uttar Pradesh'],['mp','Madhya Pradesh'],['rajasthan','Rajasthan'],['ap','Andhra Pradesh'],['telangana','Telangana'],['tamil-nadu','Tamil Nadu'],['wb','West Bengal']];
   const monthOptions = [['1','January'],['2','February'],['3','March'],['4','April'],['5','May'],['6','June'],['7','July'],['8','August'],['9','September'],['10','October'],['11','November'],['12','December']];
 
   return (
