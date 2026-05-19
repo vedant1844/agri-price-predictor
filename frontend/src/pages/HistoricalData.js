@@ -58,7 +58,6 @@ export default function HistoricalData() {
       console.log('[HistoricalData] Got', Array.isArray(data) ? data.length : 0, 'records');
 
       if (!Array.isArray(data) || data.length === 0) {
-        // If first attempt fails, retry once after waking server
         if (retryCount === 0) {
           console.log('[HistoricalData] Empty response, retrying after wake-up...');
           setServerStatus('waking');
@@ -67,29 +66,33 @@ export default function HistoricalData() {
           return loadData(1);
         }
         setNoData(true); setRecords([]); setAllRecords([]); setAvailableDates([]);
-        setLoading(false); return;
+        return;
       }
       setAllRecords(data);
 
       // Get all available dates
       const dates = [...new Set(data.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
       setAvailableDates(dates);
+      console.log('[HistoricalData] Available dates:', dates.slice(0, 5));
 
-      // Auto-select latest date if current date has no data
-      const filtered = data.filter(p => p.arrival_date === date);
+      // Use current date, or auto-pick latest available date if no match
+      let useDate = date;
+      let filtered = data.filter(p => p.arrival_date === date);
       if (filtered.length === 0 && dates.length > 0) {
-        setDate(dates[0]);
-        setLoading(false); return;
+        useDate = dates[0];
+        filtered = data.filter(p => p.arrival_date === useDate);
+        setDate(useDate); // Update picker to show the correct date
+        console.log('[HistoricalData] Auto-selected date:', useDate);
       }
 
       if (filtered.length === 0) {
         setNoData(true); setRecords([]);
       } else {
+        console.log('[HistoricalData] Showing', filtered.length, 'records for', useDate);
         setNoData(false); setRecords(filtered);
       }
     } catch (err) {
       console.error('[HistoricalData] Error:', err.message);
-      // Retry once on error
       if (retryCount === 0) {
         console.log('[HistoricalData] Error, retrying...');
         setServerStatus('waking');
