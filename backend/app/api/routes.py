@@ -49,7 +49,7 @@ def fetch(background_tasks: BackgroundTasks):
 def prices(
     commodity: Optional[str] = Query(None, description="Filter by commodity name"),
     state: Optional[str] = Query(None, description="Filter by state name"),
-    limit: int = Query(100, ge=1, le=500, description="Number of records"),
+    limit: int = Query(100, ge=1, le=2000, description="Number of records"),
 ):
     """Get historical prices from Supabase, optionally filtered."""
     try:
