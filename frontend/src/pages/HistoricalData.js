@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { fetchPrices, fetchCommodities, fetchStates } from '../api';
+import { fetchPrices, fetchStates, wakeUpServer } from '../api';
 import { jsPDF } from 'jspdf';
 
 const selStyle = {
@@ -22,16 +22,21 @@ export default function HistoricalData() {
   const [stateOpts, setStateOpts] = useState([]);
   const [noData, setNoData] = useState(false);
   const [availableDates, setAvailableDates] = useState([]);
+  const [serverStatus, setServerStatus] = useState('');
 
-  // Load states on mount
+  // Load states on mount + wake up server
   useEffect(() => {
     async function load() {
+      setServerStatus('waking');
       try {
+        await wakeUpServer();
+        setServerStatus('ready');
         const sRes = await fetchStates();
         const states = sRes.states || [];
         setStateOpts(states.length > 0 ? states : ['Maharashtra','Tamil Nadu','Gujarat','Karnataka']);
         if (states.length > 0) setState(states[0]);
       } catch {
+        setServerStatus('error');
         setStateOpts(['Maharashtra','Tamil Nadu','Gujarat','Karnataka']);
         setState('Maharashtra');
       }
@@ -45,11 +50,22 @@ export default function HistoricalData() {
     loadData();
   }, [state, date]); // eslint-disable-line
 
-  async function loadData() {
+  async function loadData(retryCount = 0) {
     setLoading(true); setNoData(false);
     try {
-      const data = await fetchPrices({ state, limit: 1000 });
+      console.log('[HistoricalData] Fetching prices for state:', state);
+      const data = await fetchPrices({ state, limit: 2000 });
+      console.log('[HistoricalData] Got', Array.isArray(data) ? data.length : 0, 'records');
+
       if (!Array.isArray(data) || data.length === 0) {
+        // If first attempt fails, retry once after waking server
+        if (retryCount === 0) {
+          console.log('[HistoricalData] Empty response, retrying after wake-up...');
+          setServerStatus('waking');
+          await wakeUpServer();
+          setServerStatus('ready');
+          return loadData(1);
+        }
         setNoData(true); setRecords([]); setAllRecords([]); setAvailableDates([]);
         setLoading(false); return;
       }
@@ -61,7 +77,7 @@ export default function HistoricalData() {
 
       // Auto-select latest date if current date has no data
       const filtered = data.filter(p => p.arrival_date === date);
-      if (filtered.length === 0 && dates.length > 0 && date === getToday()) {
+      if (filtered.length === 0 && dates.length > 0) {
         setDate(dates[0]);
         setLoading(false); return;
       }
@@ -72,7 +88,15 @@ export default function HistoricalData() {
         setNoData(false); setRecords(filtered);
       }
     } catch (err) {
-      console.warn('Error:', err.message);
+      console.error('[HistoricalData] Error:', err.message);
+      // Retry once on error
+      if (retryCount === 0) {
+        console.log('[HistoricalData] Error, retrying...');
+        setServerStatus('waking');
+        await wakeUpServer();
+        setServerStatus('ready');
+        return loadData(1);
+      }
       setNoData(true); setRecords([]); setAllRecords([]); setAvailableDates([]);
     } finally { setLoading(false); }
   }
@@ -161,11 +185,17 @@ export default function HistoricalData() {
 
   return (
     <>
-      {loading && <LoadingOverlay message="Fetching market data..." />}
+      {loading && <LoadingOverlay message={serverStatus === 'waking' ? "Waking up server... please wait (free tier)" : "Fetching market data..."} />}
       <div style={{ minHeight:'calc(100vh - 64px)', background:'#f0f7f0', padding:'3rem 1.5rem' }}>
         <div style={{ maxWidth:960, margin:'0 auto' }}>
           <h2 style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.9rem', color:'#2d6235', marginBottom:4 }}>📊 Historical Data</h2>
           <p style={{ color:'#4a6b4a', marginBottom:'2rem' }}>Select a state and date to view and download market price data</p>
+
+          {serverStatus === 'waking' && !loading && (
+            <div style={{ background:'#fff3e0', border:'1px solid #ffcc80', borderRadius:10, padding:'10px 14px', fontSize:'0.84rem', color:'#e65100', marginBottom:'1rem' }}>
+              ⏳ Server is waking up (free tier). Data will load shortly...
+            </div>
+          )}
 
           {/* Filters */}
           <div style={{ background:'white', borderRadius:14, padding:'1.5rem', display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:'1rem', marginBottom:'1.5rem', boxShadow:'0 2px 12px rgba(0,0,0,0.06)', alignItems:'end' }}>

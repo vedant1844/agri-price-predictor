@@ -148,7 +148,7 @@ def get_cached_prices(commodity=None, state=None, limit=100):
     try:
         # Simple raw SQL — SELECT * avoids any column mismatch
         conditions = []
-        params = {"lim": min(limit, 500)}
+        params = {"lim": min(limit, 2000)}
 
         if commodity:
             conditions.append("LOWER(commodity) = LOWER(:commodity)")

@@ -13,7 +13,7 @@ const API_BASE = process.env.REACT_APP_API_URL || 'https://agri-backend-y21k.onr
 async function apiFetch(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout
+  const timeout = setTimeout(() => controller.abort(), 60000); // 60s timeout for Render free tier
 
   try {
     const response = await fetch(url, {
