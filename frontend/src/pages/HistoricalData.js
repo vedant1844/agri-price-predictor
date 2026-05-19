@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import LoadingOverlay from '../components/LoadingOverlay';
-import { fetchPrices, fetchStates, wakeUpServer } from '../api';
+import { fetchStates } from '../api';
 import { jsPDF } from 'jspdf';
+
+const API_BASE = process.env.REACT_APP_API_URL || 'https://agri-backend-y21k.onrender.com';
 
 const selStyle = {
   width: '100%', padding: '10px 14px', border: '1.5px solid rgba(58,125,68,0.2)',
@@ -17,26 +19,26 @@ export default function HistoricalData() {
   const [state, setState] = useState('');
   const [date, setDate] = useState(getToday());
   const [records, setRecords] = useState([]);
-  const [allRecords, setAllRecords] = useState([]);
   const [loading, setLoading] = useState(false);
   const [stateOpts, setStateOpts] = useState([]);
   const [noData, setNoData] = useState(false);
   const [availableDates, setAvailableDates] = useState([]);
-  const [serverStatus, setServerStatus] = useState('');
+  const [statusMsg, setStatusMsg] = useState('');
 
-  // Load states on mount + wake up server
+  // Load states on mount
   useEffect(() => {
     async function load() {
-      setServerStatus('waking');
       try {
-        await wakeUpServer();
-        setServerStatus('ready');
         const sRes = await fetchStates();
         const states = sRes.states || [];
-        setStateOpts(states.length > 0 ? states : ['Maharashtra','Tamil Nadu','Gujarat','Karnataka']);
-        if (states.length > 0) setState(states[0]);
+        if (states.length > 0) {
+          setStateOpts(states);
+          setState(states[0]);
+        } else {
+          setStateOpts(['Maharashtra','Tamil Nadu','Gujarat','Karnataka']);
+          setState('Maharashtra');
+        }
       } catch {
-        setServerStatus('error');
         setStateOpts(['Maharashtra','Tamil Nadu','Gujarat','Karnataka']);
         setState('Maharashtra');
       }
@@ -44,65 +46,91 @@ export default function HistoricalData() {
     load();
   }, []);
 
-  // Fetch data when state or date changes
-  useEffect(() => {
-    if (!state) return;
-    loadData();
-  }, [state, date]); // eslint-disable-line
+  // Fetch data using direct fetch (bypasses any wrapper issues)
+  const loadData = useCallback(async (selectedState, selectedDate) => {
+    if (!selectedState) return;
+    setLoading(true); setNoData(false); setStatusMsg('Fetching data...');
 
-  async function loadData(retryCount = 0) {
-    setLoading(true); setNoData(false);
     try {
-      console.log('[HistoricalData] Fetching prices for state:', state);
-      const data = await fetchPrices({ state, limit: 2000 });
-      console.log('[HistoricalData] Got', Array.isArray(data) ? data.length : 0, 'records');
+      const url = `${API_BASE}/prices?state=${encodeURIComponent(selectedState)}&limit=2000`;
+      const response = await fetch(url, {
+        headers: { 'Accept': 'application/json' },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server error: ${response.status}`);
+      }
+
+      const data = await response.json();
 
       if (!Array.isArray(data) || data.length === 0) {
-        if (retryCount === 0) {
-          console.log('[HistoricalData] Empty response, retrying after wake-up...');
-          setServerStatus('waking');
-          await wakeUpServer();
-          setServerStatus('ready');
-          return loadData(1);
-        }
-        setNoData(true); setRecords([]); setAllRecords([]); setAvailableDates([]);
+        setNoData(true); setRecords([]); setAvailableDates([]);
+        setStatusMsg('No data found');
         return;
       }
-      setAllRecords(data);
 
       // Get all available dates
       const dates = [...new Set(data.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
       setAvailableDates(dates);
-      console.log('[HistoricalData] Available dates:', dates.slice(0, 5));
 
-      // Use current date, or auto-pick latest available date if no match
-      let useDate = date;
-      let filtered = data.filter(p => p.arrival_date === date);
+      // Filter by date - auto-pick latest if no match
+      let useDate = selectedDate;
+      let filtered = data.filter(p => p.arrival_date === selectedDate);
       if (filtered.length === 0 && dates.length > 0) {
         useDate = dates[0];
         filtered = data.filter(p => p.arrival_date === useDate);
-        setDate(useDate); // Update picker to show the correct date
-        console.log('[HistoricalData] Auto-selected date:', useDate);
+        setDate(useDate);
       }
 
       if (filtered.length === 0) {
         setNoData(true); setRecords([]);
+        setStatusMsg(`No data for ${useDate}`);
       } else {
-        console.log('[HistoricalData] Showing', filtered.length, 'records for', useDate);
         setNoData(false); setRecords(filtered);
+        setStatusMsg(`${filtered.length} records loaded`);
       }
     } catch (err) {
-      console.error('[HistoricalData] Error:', err.message);
-      if (retryCount === 0) {
-        console.log('[HistoricalData] Error, retrying...');
-        setServerStatus('waking');
-        await wakeUpServer();
-        setServerStatus('ready');
-        return loadData(1);
+      console.error('Fetch error:', err);
+      setStatusMsg(`Error: ${err.message}. Retrying...`);
+      // Retry once
+      try {
+        await new Promise(r => setTimeout(r, 3000));
+        const url = `${API_BASE}/prices?state=${encodeURIComponent(selectedState)}&limit=2000`;
+        const response = await fetch(url);
+        const data = await response.json();
+        if (Array.isArray(data) && data.length > 0) {
+          const dates = [...new Set(data.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
+          setAvailableDates(dates);
+          let useDate = selectedDate;
+          let filtered = data.filter(p => p.arrival_date === selectedDate);
+          if (filtered.length === 0 && dates.length > 0) {
+            useDate = dates[0];
+            filtered = data.filter(p => p.arrival_date === useDate);
+            setDate(useDate);
+          }
+          setNoData(filtered.length === 0); setRecords(filtered);
+          setStatusMsg(`${filtered.length} records loaded (retry)`);
+        } else {
+          setNoData(true); setRecords([]); setAvailableDates([]);
+          setStatusMsg('No data after retry');
+        }
+      } catch (retryErr) {
+        setNoData(true); setRecords([]); setAvailableDates([]);
+        setStatusMsg('Server unavailable - try again later');
       }
-      setNoData(true); setRecords([]); setAllRecords([]); setAvailableDates([]);
     } finally { setLoading(false); }
-  }
+  }, []);
+
+  // Fetch when state changes
+  useEffect(() => {
+    if (state) loadData(state, date);
+  }, [state]); // eslint-disable-line
+
+  // Fetch when date changes (only if we already have a state)
+  const handleDateChange = (newDate) => {
+    setDate(newDate);
+    if (state) loadData(state, newDate);
+  };
 
   const dateLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'long', year:'numeric' });
 
@@ -152,13 +180,11 @@ export default function HistoricalData() {
         doc.setFillColor(i % 2 === 0 ? 245 : 255, i % 2 === 0 ? 248 : 255, i % 2 === 0 ? 245 : 255);
         doc.rect(10, y - 4, 277, 8, 'F');
         doc.setTextColor(26, 46, 26);
-
         const txt = (val, maxLen) => { const s = String(val || '—'); return s.length > maxLen ? s.substring(0, maxLen-2) + '..' : s; };
         doc.text(txt(r.commodity, 28), 14, y);
         doc.text(txt(r.district, 20), 64, y);
         doc.text(txt(r.market, 30), 99, y);
         doc.text(txt(r.variety, 20), 154, y);
-
         doc.setTextColor(198, 40, 40);
         doc.text('Rs.' + (r.min_price || 0).toLocaleString('en-IN'), 189, y);
         doc.setTextColor(21, 101, 192);
@@ -179,7 +205,7 @@ export default function HistoricalData() {
       doc.setTextColor(124, 96, 0);
       doc.text('Source: Supabase Database (data.gov.in)  |  Prices in Rs. per Quintal  |  AgriPaiya - Crop Price Prediction System', 148, y + 9, { align: 'center' });
 
-      doc.save(state + '_market_data_' + date + '.pdf');
+      doc.save(state.replace(/\s+/g, '_') + '_market_data_' + date + '.pdf');
     } catch (err) {
       console.error('PDF error:', err);
       alert('Error generating PDF: ' + err.message);
@@ -188,29 +214,23 @@ export default function HistoricalData() {
 
   return (
     <>
-      {loading && <LoadingOverlay message={serverStatus === 'waking' ? "Waking up server... please wait (free tier)" : "Fetching market data..."} />}
+      {loading && <LoadingOverlay message="Fetching market data..." />}
       <div style={{ minHeight:'calc(100vh - 64px)', background:'#f0f7f0', padding:'3rem 1.5rem' }}>
         <div style={{ maxWidth:960, margin:'0 auto' }}>
           <h2 style={{ fontFamily:"'Playfair Display',serif", fontSize:'1.9rem', color:'#2d6235', marginBottom:4 }}>📊 Historical Data</h2>
           <p style={{ color:'#4a6b4a', marginBottom:'2rem' }}>Select a state and date to view and download market price data</p>
 
-          {serverStatus === 'waking' && !loading && (
-            <div style={{ background:'#fff3e0', border:'1px solid #ffcc80', borderRadius:10, padding:'10px 14px', fontSize:'0.84rem', color:'#e65100', marginBottom:'1rem' }}>
-              ⏳ Server is waking up (free tier). Data will load shortly...
-            </div>
-          )}
-
           {/* Filters */}
           <div style={{ background:'white', borderRadius:14, padding:'1.5rem', display:'grid', gridTemplateColumns:'1fr 1fr auto', gap:'1rem', marginBottom:'1.5rem', boxShadow:'0 2px 12px rgba(0,0,0,0.06)', alignItems:'end' }}>
             <div>
               <label style={lblStyle}>State</label>
-              <select value={state} onChange={e => setState(e.target.value)} style={selStyle}>
+              <select value={state} onChange={e => { setState(e.target.value); }} style={selStyle}>
                 {stateOpts.map(o => <option key={o}>{o}</option>)}
               </select>
             </div>
             <div>
               <label style={lblStyle}>Date</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} max={getToday()} style={selStyle} />
+              <input type="date" value={date} onChange={e => handleDateChange(e.target.value)} max={getToday()} style={selStyle} />
             </div>
             <button onClick={downloadPDF} disabled={records.length === 0}
               style={{ padding:'10px 20px', background: records.length > 0 ? 'linear-gradient(135deg, #1976d2, #1565c0)' : '#ccc', color:'white', border:'none', borderRadius:8, fontSize:'0.88rem', fontWeight:600, cursor: records.length > 0 ? 'pointer' : 'not-allowed', fontFamily:"'DM Sans',sans-serif", display:'flex', alignItems:'center', gap:6, whiteSpace:'nowrap', height:42 }}>
@@ -232,7 +252,7 @@ export default function HistoricalData() {
                   <p style={{ color:'#3a7d44', fontSize:'0.85rem', fontWeight:600, marginBottom:'0.5rem' }}>📅 Available dates with data:</p>
                   <div style={{ display:'flex', flexWrap:'wrap', gap:6, justifyContent:'center' }}>
                     {availableDates.slice(0, 10).map(d => (
-                      <button key={d} onClick={() => setDate(d)}
+                      <button key={d} onClick={() => handleDateChange(d)}
                         style={{ padding:'6px 12px', background: d === date ? '#3a7d44' : '#e8f5e9', color: d === date ? 'white' : '#2d6235', border:'1px solid #a5d6a7', borderRadius:6, fontSize:'0.8rem', cursor:'pointer', fontFamily:"'DM Sans',sans-serif", fontWeight:500 }}>
                         {new Date(d+'T00:00:00').toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}
                       </button>
