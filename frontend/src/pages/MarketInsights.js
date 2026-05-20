@@ -58,13 +58,10 @@ export default function MarketInsights() {
         return;
       }
 
-      // Get latest date from data
-      const dates = [...new Set(data.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
-      const latestDate = dates[0] || getToday();
-      setDataDate(latestDate);
-
-      // Filter only latest date records
-      const todayRecords = data.filter(p => p.arrival_date === latestDate);
+      // Filter strictly by TODAY's date only
+      const today = getToday();
+      setDataDate(today);
+      const todayRecords = data.filter(p => p.arrival_date === today);
 
       if (todayRecords.length === 0) {
         setNoData(true); setRecords([]);
@@ -80,10 +77,9 @@ export default function MarketInsights() {
         const res = await fetch(url);
         const data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          const dates = [...new Set(data.map(p => p.arrival_date).filter(Boolean))].sort().reverse();
-          const latestDate = dates[0] || getToday();
-          setDataDate(latestDate);
-          const todayRecords = data.filter(p => p.arrival_date === latestDate);
+          const today = getToday();
+          setDataDate(today);
+          const todayRecords = data.filter(p => p.arrival_date === today);
           setNoData(todayRecords.length === 0); setRecords(todayRecords);
         } else {
           setNoData(true); setRecords([]);
