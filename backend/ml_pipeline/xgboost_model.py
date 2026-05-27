@@ -37,6 +37,19 @@ MODEL_DIR = os.path.join(os.path.dirname(__file__))
 MODEL_PATH = os.path.join(MODEL_DIR, "model.pkl")
 ENCODERS_PATH = os.path.join(MODEL_DIR, "encoders.pkl")
 
+# Lazy-loaded model cache (avoids loading at import time to save RAM)
+_model_cache = None
+_encoders_cache = None
+
+
+def _load_model():
+    """Load model and encoders lazily, caching for subsequent calls."""
+    global _model_cache, _encoders_cache
+    if _model_cache is None:
+        _model_cache = joblib.load(MODEL_PATH)
+        _encoders_cache = joblib.load(ENCODERS_PATH)
+    return _model_cache, _encoders_cache
+
 
 def predict_price(commodity="wheat", state="karnataka", month=4,
                   current_year=2026, future_year=2028):
@@ -64,8 +77,7 @@ def predict_price(commodity="wheat", state="karnataka", month=4,
 
 def _predict_with_model(commodity, state, month, current_year, future_year):
     """Predict using the trained hybrid ARIMA + XGBoost model."""
-    model_data = joblib.load(MODEL_PATH)
-    encoders = joblib.load(ENCODERS_PATH)
+    model_data, encoders = _load_model()
 
     xgb_model = model_data["xgb_model"]
     rmse = model_data.get("rmse", 0)

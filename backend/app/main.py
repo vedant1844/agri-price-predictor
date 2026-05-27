@@ -46,12 +46,104 @@ def migrate_database():
     print("✅ Database migration completed")
 
 
+def grant_api_access():
+    """
+    Grant Supabase Data API access to public tables.
+
+    As of May 30, 2026, Supabase no longer auto-exposes tables in the
+    'public' schema to the Data API (PostgREST / supabase-js / GraphQL).
+    This function adds explicit GRANT statements for the 'anon' and
+    'authenticated' roles so the tables remain accessible.
+
+    See: https://supabase.com/changelog
+    """
+    from sqlalchemy import text
+
+    tables = ["prices", "commodity_prices", "commodity_data", "predictions"]
+    roles = ["anon", "authenticated"]
+
+    with engine.connect() as conn:
+        for table in tables:
+            for role in roles:
+                try:
+                    conn.execute(text(
+                        f"GRANT SELECT ON {table} TO {role}"
+                    ))
+                except Exception as e:
+                    # Role/table may not exist in non-Supabase environments
+                    print(f"⚠ GRANT {role} on {table}: {e}")
+        try:
+            # Ensure usage on the public schema is also granted
+            for role in roles:
+                conn.execute(text(
+                    f"GRANT USAGE ON SCHEMA public TO {role}"
+                ))
+        except Exception as e:
+            print(f"⚠ GRANT USAGE on schema public: {e}")
+        conn.commit()
+    print("✅ Supabase Data API access granted (anon, authenticated)")
+
+
+def enable_rls():
+    """
+    Enable Row-Level Security (RLS) on public tables and create
+    appropriate access policies.
+
+    Without RLS, anyone with the Supabase project URL can read, edit,
+    and delete all data via the Data API. This is flagged as a CRITICAL
+    security issue by Supabase's Security Advisor.
+
+    Our approach:
+    - Enable RLS on the prices table
+    - Allow anon & authenticated roles to SELECT (read) only
+    - The 'postgres' role (used by our backend & scripts via
+      DATABASE_URL) bypasses RLS automatically, so all backend
+      writes continue to work without changes.
+    """
+    from sqlalchemy import text
+
+    tables = ["prices", "commodity_prices", "commodity_data", "predictions"]
+
+    with engine.connect() as conn:
+        for table in tables:
+            # 1. Enable RLS
+            try:
+                conn.execute(text(
+                    f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY"
+                ))
+                print(f"  RLS enabled on '{table}'")
+            except Exception as e:
+                print(f"  RLS on {table}: {e}")
+
+            # 2. Create a read-only policy (drop first for idempotency)
+            policy_name = f"{table}_public_read"
+            try:
+                conn.execute(text(
+                    f"DROP POLICY IF EXISTS {policy_name} ON {table}"
+                ))
+                conn.execute(text(f"""
+                    CREATE POLICY {policy_name} ON {table}
+                        FOR SELECT
+                        TO anon, authenticated
+                        USING (true)
+                """))
+                print(f"  Policy '{policy_name}' created (SELECT only)")
+            except Exception as e:
+                print(f"  Policy on {table}: {e}")
+
+        conn.commit()
+
+    print("✅ Row-Level Security configured (prices table is now protected)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events for the FastAPI app."""
     # ── Startup ──
     Base.metadata.create_all(bind=engine)
     migrate_database()
+    grant_api_access()
+    enable_rls()
     print("✅ Database tables created/verified")
     print("ℹ️  Data fetching handled by external cron job (cron-job.org)")
 

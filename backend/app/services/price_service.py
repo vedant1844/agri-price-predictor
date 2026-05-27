@@ -158,7 +158,11 @@ def get_cached_prices(commodity=None, state=None, limit=100):
             params["state"] = state
 
         where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-        sql = f"SELECT * FROM prices {where} ORDER BY created_at DESC LIMIT :lim"
+        # Select only the columns we need (avoids loading id and other unused columns)
+        sql = f"""SELECT commodity, state, district, market, variety, grade,
+                         min_price, max_price, modal_price, price, unit,
+                         arrival_date, created_at
+                  FROM prices {where} ORDER BY created_at DESC LIMIT :lim"""
 
         result = db.execute(text(sql), params)
         rows = result.fetchall()
