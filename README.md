@@ -1,3 +1,4 @@
+```markdown name=README.md
 # Agri Price Predictor
 
 A full-stack agricultural price forecasting and market insights platform that helps users explore historical prices, view current mandi data, and predict future commodity prices using an AI-powered hybrid forecasting pipeline.
@@ -98,8 +99,138 @@ agri-price-predictor/
 ├── .gitignore
 ├── runtime.txt
 └── README.md
-
-
-
+```
 
 ## Backend API
+
+The FastAPI app is exposed through the backend service and includes the following core endpoints:
+
+### Health and Service
+- `GET /`
+- `GET /health`
+
+### Data Fetching
+- `GET /update-data`
+- `GET /fetch`
+
+### Historical Price Data
+- `GET /prices`
+- `GET /price-stats`
+- `GET /commodities`
+- `GET /states`
+- `GET /districts`
+
+### Prediction
+- `GET /predict`
+
+### Model Training
+- `GET /train`
+
+### Market Data
+- `GET /market-data`
+
+Example:
+```bash
+curl "http://localhost:8000/predict?commodity=wheat&state=karnataka&month=4"
+```
+
+## Environment Variables
+
+Configure environment variables for the backend, typically in `backend/.env`:
+
+```env
+DATABASE_URL=your_postgres_or_supabase_connection_string
+AGRI_API_URL=your_agri_data_source_url
+FRONTEND_URL=http://localhost:3000
+THRESHOLD=2
+```
+
+The app loads these values from the backend environment on startup.
+
+## Getting Started
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/vedant1844/agri-price-predictor.git
+cd agri-price-predictor
+```
+
+### 2. Backend setup
+
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run the backend:
+
+```bash
+uvicorn app.main:app --reload
+```
+
+The API will typically be available at:
+```bash
+http://localhost:8000
+```
+
+### 3. Frontend setup
+
+```bash
+cd frontend
+npm install
+npm start
+```
+
+The frontend will typically run at:
+```bash
+http://localhost:3000
+```
+
+## Data Flow
+
+1. Market/price data is fetched from agriculture data sources via scheduled scripts.
+2. Data is normalized and stored in the Postgres/Supabase database.
+3. The backend exposes endpoints for querying historical and live data.
+4. The prediction service uses the trained hybrid model to generate forecasts.
+5. The frontend visualizes the results in charts and dashboards.
+
+## Machine Learning
+
+The project uses a hybrid forecasting strategy:
+- ARIMA for time-series trend modeling
+- XGBoost for capturing nonlinear patterns and feature-driven variation
+- Model artifacts stored in `backend/ml_pipeline/`
+
+The training pipeline can be triggered with the backend training endpoint.
+
+## Deployment Notes
+
+- Frontend is intended to be served via Vercel-style deployment.
+- Backend is designed for a cloud-hosted Python service.
+- Scheduler jobs can be used to periodically refresh market data.
+
+## License
+
+This project does not currently include a repository license file. If this project is intended for public reuse, consider adding an appropriate license such as MIT or Apache 2.0.
+
+## Contributing
+
+Contributions are welcome. If you want to improve the model, data ingestion, or frontend experience:
+Please Contact For Collaboration : joshivedant985@gmail.com
+
+## Contact
+joshivedant985@gmail.com
+Project repository:
+- https://github.com/vedant1844/agri-price-predictor
+
+## Acknowledgements
+
+- Government agricultural market datasets
+- FastAPI and the Python data science ecosystem
+- React and charting libraries
+- Supabase/PostgreSQL for data management
+```
+
